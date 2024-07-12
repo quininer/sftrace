@@ -42,7 +42,8 @@ thread_local!{
 
 impl Drop for Local {
     fn drop(&mut self) {
-        let local = std::mem::take(&mut self.events);
+        let mut local = std::mem::take(&mut self.events);
+        local.shrink_to_fit();
         let mut global = GLOBAL.lock().unwrap();
         global.push(local);
     }
