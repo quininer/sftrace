@@ -60,7 +60,7 @@ impl GlobalEventList {
                 time: Instant::now(),
                 tid: *local.tid.get_or_insert_with(thread_id),
                 depth: local.depth,
-                r#return: r#return
+                r#return
             };
 
             match r#return {

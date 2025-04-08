@@ -1,59 +1,164 @@
 mod util;
 mod events;
+mod record;
 
+use std::ptr;
 use std::path::{ PathBuf, Path };
-use std::arch::asm;
 use events::GlobalEventList;
+use object::{Object, ObjectSection, ObjectSymbol, ObjectSymbolTable};
 
 
 #[no_mangle]
-pub unsafe extern "C" fn mcount() {
-    let mut addr: *const u8;
-    let mut sp: *const u8;
+pub extern "C" fn sftrace_setup() {
+    use std::sync::Once;
 
-    asm!{
-        "mov {addr}, [rbp + 8]",
-        "mov {sp}, rsp",
-        addr = out(reg) addr,
-        sp = out(reg) sp
-    }
+    static ONCE: Once = Once::new();
 
-    init();
-
-    GlobalEventList.record(addr, sp);
+    ONCE.call_once(init);
 }
 
 fn init() {
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-
-    INIT.call_once(|| unsafe {
-        match libc::atexit(dtor) {
+    patch_xray();
+    
+    unsafe {
+        match libc::atexit(shutdown) {
             0 => (),
             err => panic!("atexit failed: {:?}", err)
         }
-    });
+    }
 }
 
-extern "C" fn dtor() {
+fn patch_xray() {
+    use zerocopy::*;
+    use findshlibs::{ SharedLibrary, Segment };
+
+    // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
+    #[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
+    #[repr(C)]
+    struct XRayFunctionEntry {
+        address: usize,
+        function: usize,
+        kind: u8,
+        always_instrument: u8,
+        version: u8,
+        padding: [u8; (4 * 8) - ((2 * 8) + 3)]
+    }
+
+    const _ASSERT_ARCH: () = if !cfg!(target_pointer_width = "64") {
+        panic!("64bit only")
+    };
+    const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
+
+    findshlibs::TargetSharedLibrary::each(|shlib| {
+        let Ok(fd) = std::fs::File::open(shlib.name())
+            else { return };
+        let Ok(buf) = (unsafe { memmap2::Mmap::map(&fd) })
+            else { return };
+        let Ok(obj) = object::File::parse(buf.as_ref())
+            else { return };
+        let Some(section) = obj.section_by_name("xray_instr_map")
+            else { return };
+        let Ok(buf) = section.uncompressed_data()
+            else { return };
+
+        let base = shlib.actual_load_addr();
+
+        let (entry_map, tail) = <[XRayFunctionEntry]>::ref_from_prefix_with_elems(
+            buf.as_ref(),
+            buf.len() / std::mem::size_of::<XRayFunctionEntry>()
+        ).unwrap();
+        assert!(tail.is_empty());
+
+        for (i, entry) in entry_map.iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.version == 2)
+        {
+            let section_offset: usize = section.address().try_into().unwrap();
+            let entry_offset = section_offset + i * std::mem::size_of::<XRayFunctionEntry>();
+            
+            // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
+            // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199
+            let address = base.0 + entry_offset + entry.address;
+            let _function = base.0 + entry_offset + entry.address + std::mem::size_of::<usize>();
+
+            // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
+            unsafe {
+                match entry.kind {
+                    // entry
+                    0 => patch_entry(address),
+                    // exit
+                    1 => patch_exit(address),
+                    _ => ()
+                }
+            }
+        }
+    });
+
+    todo!()
+}
+
+// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
+unsafe fn patch_entry(address: usize) {
+    use std::sync::atomic::{ self, AtomicU16 };
+
+    const CALL_OP_CODE: u8 = 0xe8;
+    const MOV_R10_SEQ: u16 = 0xba41;
+
+    // TODO support more arch
+    assert!(cfg!(target_arch = "x86_64"));
+    
+    let trampoline = record::xray_enter as usize;
+
+    // TODO trampoline need forward
+    
+    let offset = trampoline - (address + 11);
+    let offset: u32 = offset.try_into().unwrap();
+
+    let addr = ptr::null_mut::<u8>().with_addr(address);
+
+    unsafe {
+        addr.byte_add(2).cast::<u32>().write(0);
+        addr.byte_add(6).write(CALL_OP_CODE);
+        addr.byte_add(7).cast::<u32>().write(offset);
+        AtomicU16::from_ptr(addr.cast())
+            .store(MOV_R10_SEQ, atomic::Ordering::Release);
+    }
+}
+
+unsafe fn patch_exit(address: usize) {
+    use std::sync::atomic::{ self, AtomicU16 };
+    
+    const MOV_R10_SEQ: u16 = 0xba41;
+    const JMP_OP_CODE: u8 = 0xe9;
+
+    // TODO support more arch
+    assert!(cfg!(target_arch = "x86_64"));
+    
+    let trampoline = record::xray_exit as usize;
+    let offset = trampoline - (address + 11);
+    let offset: u32 = offset.try_into().unwrap();
+
+    let addr = ptr::null_mut::<u8>().with_addr(address);
+
+    unsafe {
+        addr.byte_add(2).cast::<u32>().write(0);
+        addr.byte_add(6).write(JMP_OP_CODE);
+        addr.byte_add(7).cast::<u32>().write(offset);
+        AtomicU16::from_ptr(addr.cast())
+            .store(MOV_R10_SEQ, atomic::Ordering::Release);
+    }
+}
+
+extern "C" fn shutdown() {
     use std::io::Write;
 
-    std::fs::copy("/proc/self/maps", output().join("maps")).unwrap();
+    let outdir = std::env::var_os("SFTRACE_OUTPUT_DIR").unwrap();
+    let outdir = Path::new(&outdir);
+
+    std::fs::copy("/proc/self/maps", outdir.join("maps")).unwrap();
 
     let list = GlobalEventList.take();
-    let mut fd = std::fs::File::create(output().join("logs")).unwrap();
+    let mut fd = std::fs::File::create(outdir.join("logs")).unwrap();
 
     write!(&mut fd, "{:#?}", list).unwrap();
-}
-
-fn output() -> &'static Path {
-    use std::sync::OnceLock;
-    static OUTPUT: OnceLock<PathBuf> = OnceLock::new();
-
-    OUTPUT.get_or_init(|| {
-        std::env::var_os("SFTRACE_OUTPUT_DIR")
-            .unwrap()
-            .into()
-    })
 }
