@@ -3,22 +3,28 @@ mod events;
 mod record;
 
 use std::ptr;
-use std::path::{ PathBuf, Path };
+use std::path::Path;
 use events::GlobalEventList;
-use object::{Object, ObjectSection, ObjectSymbol, ObjectSymbolTable};
+use object::{ Object, ObjectSection };
 
 
 #[no_mangle]
-pub extern "C" fn sftrace_setup() {
+pub extern "C" fn sftrace_setup(
+    entry_slot: unsafe extern "C" fn(),
+    exit_slot: unsafe extern "C" fn()    
+) {
     use std::sync::Once;
 
     static ONCE: Once = Once::new();
 
-    ONCE.call_once(init);
+    ONCE.call_once(|| init(entry_slot, exit_slot));
 }
 
-fn init() {
-    patch_xray();
+fn init(
+    entry_slot: unsafe extern "C" fn(),
+    exit_slot: unsafe extern "C" fn()    
+) {
+    patch_xray(entry_slot, exit_slot);
     
     unsafe {
         match libc::atexit(shutdown) {
@@ -28,7 +34,10 @@ fn init() {
     }
 }
 
-fn patch_xray() {
+fn patch_xray(
+    entry_slot: unsafe extern "C" fn(),
+    exit_slot: unsafe extern "C" fn()    
+) {
     use zerocopy::*;
     use findshlibs::{ SharedLibrary, Segment };
 
@@ -85,20 +94,33 @@ fn patch_xray() {
             unsafe {
                 match entry.kind {
                     // entry
-                    0 => patch_entry(address),
+                    0 => patch_entry(address, entry_slot),
                     // exit
-                    1 => patch_exit(address),
+                    1 => patch_exit(address, exit_slot),
                     _ => ()
                 }
             }
         }
     });
 
-    todo!()
+    unsafe {
+        patch_slot(entry_slot as *mut u8, record::xray_entry as usize);
+        patch_slot(exit_slot as *mut u8, record::xray_exit as usize);
+    }    
+}
+
+unsafe fn patch_slot(slot: *mut u8, target: usize) {
+    const TRAMPOLINE: [u8; 8] = [0x3e, 0xff, 0x25, 0x01, 0x00, 0x00, 0x00, 0xcc];
+
+    // TODO support more arch
+    assert!(cfg!(target_arch = "x86_64"));    
+
+    slot.copy_from_nonoverlapping(TRAMPOLINE.as_ptr(), TRAMPOLINE.len());
+    slot.byte_add(TRAMPOLINE.len()).cast::<u64>().write(target as u64);
 }
 
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
-unsafe fn patch_entry(address: usize) {
+unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
     use std::sync::atomic::{ self, AtomicU16 };
 
     const CALL_OP_CODE: u8 = 0xe8;
@@ -107,11 +129,11 @@ unsafe fn patch_entry(address: usize) {
     // TODO support more arch
     assert!(cfg!(target_arch = "x86_64"));
     
-    let trampoline = record::xray_enter as usize;
+    let trampoline = slot as usize;
 
     // TODO trampoline need forward
     
-    let offset = trampoline - (address + 11);
+    let offset = trampoline.checked_sub(address + 11).unwrap();
     let offset: u32 = offset.try_into().unwrap();
 
     let addr = ptr::null_mut::<u8>().with_addr(address);
@@ -125,7 +147,7 @@ unsafe fn patch_entry(address: usize) {
     }
 }
 
-unsafe fn patch_exit(address: usize) {
+unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
     use std::sync::atomic::{ self, AtomicU16 };
     
     const MOV_R10_SEQ: u16 = 0xba41;
@@ -134,8 +156,9 @@ unsafe fn patch_exit(address: usize) {
     // TODO support more arch
     assert!(cfg!(target_arch = "x86_64"));
     
-    let trampoline = record::xray_exit as usize;
-    let offset = trampoline - (address + 11);
+    let trampoline = slot as usize;
+
+    let offset = trampoline.checked_sub(address + 11).unwrap();
     let offset: u32 = offset.try_into().unwrap();
 
     let addr = ptr::null_mut::<u8>().with_addr(address);
