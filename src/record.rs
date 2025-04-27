@@ -1,7 +1,13 @@
+#[unsafe(naked)]
 pub unsafe extern "C" fn xray_entry() {
-    println!("entry");
+    std::arch::naked_asm!(
+        "ret"
+    );
 }
 
+#[unsafe(naked)]
 pub unsafe extern "C" fn xray_exit() {
-    println!("exit");
+    std::arch::naked_asm!(
+        "ret"
+    );
 }

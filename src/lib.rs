@@ -6,6 +6,7 @@ use std::ptr;
 use std::path::Path;
 use events::GlobalEventList;
 use object::{ Object, ObjectSection };
+use util::{ ScopeGuard, page_size };
 
 
 #[no_mangle]
@@ -58,19 +59,61 @@ fn patch_xray(
     };
     const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
 
+    let page_size = page_size();
+
     findshlibs::TargetSharedLibrary::each(|shlib| {
+        let base = shlib.actual_load_addr();
+
+        if !(base.0..base.0 + shlib.len()).contains(&(entry_slot as usize)) {
+            return;
+        }
+        
         let Ok(fd) = std::fs::File::open(shlib.name())
             else { return };
         let Ok(buf) = (unsafe { memmap2::Mmap::map(&fd) })
             else { return };
         let Ok(obj) = object::File::parse(buf.as_ref())
             else { return };
-        let Some(section) = obj.section_by_name("xray_instr_map")
+        let Some(xray_section) = obj.section_by_name("xray_instr_map")
             else { return };
-        let Ok(buf) = section.uncompressed_data()
+        let Ok(buf) = xray_section.uncompressed_data()
             else { return };
 
-        let base = shlib.actual_load_addr();
+        let Some((text_addr, text_len)) = shlib.segments()
+            .filter(|seg| seg.is_code() && seg.len() != 0)
+            .map(|seg| (seg.actual_virtual_memory_address(shlib), seg.len()))
+            .filter(|(addr, len)| (addr.0..addr.0 + len).contains(&(entry_slot as usize)))
+            .next()
+            .map(|(text_addr, text_len)| {
+                let addr = text_addr.0 & !(page_size - 1);
+                let len = text_addr.0 + text_len - addr;
+                (addr, len)
+            })
+            else { return };
+
+        // unlock
+        unsafe {
+            if libc::mprotect(
+                text_addr as *mut _,
+                text_len,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
+            ) != 0 {
+                eprintln!("text segment unlock failed");
+                std::process::abort();
+            }
+        }
+
+        // lock it back
+        let _guard = ScopeGuard((), |_| unsafe {
+            if libc::mprotect(
+                text_addr as *mut _,
+                text_len,
+                libc::PROT_READ | libc::PROT_EXEC
+            ) != 0 {
+                eprintln!("text segment lock failed");
+                std::process::abort();
+            }
+        });
 
         let (entry_map, tail) = <[XRayFunctionEntry]>::ref_from_prefix_with_elems(
             buf.as_ref(),
@@ -82,7 +125,7 @@ fn patch_xray(
             .enumerate()
             .filter(|(_, entry)| entry.version == 2)
         {
-            let section_offset: usize = section.address().try_into().unwrap();
+            let section_offset: usize = xray_section.address().try_into().unwrap();
             let entry_offset = section_offset + i * std::mem::size_of::<XRayFunctionEntry>();
             
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
@@ -101,12 +144,12 @@ fn patch_xray(
                 }
             }
         }
-    });
 
-    unsafe {
-        patch_slot(entry_slot as *mut u8, record::xray_entry as usize);
-        patch_slot(exit_slot as *mut u8, record::xray_exit as usize);
-    }    
+        unsafe {
+            patch_slot(entry_slot as *mut u8, record::xray_entry as usize);
+            patch_slot(exit_slot as *mut u8, record::xray_exit as usize);
+        }        
+    });    
 }
 
 unsafe fn patch_slot(slot: *mut u8, target: usize) {
@@ -131,17 +174,18 @@ unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
     
     let trampoline = slot as usize;
 
-    // TODO trampoline need forward
-    
-    let offset = trampoline.checked_sub(address + 11).unwrap();
-    let offset: u32 = offset.try_into().unwrap();
+    // let offset = trampoline.abs_diff(address + 11);
+    // let mut offset: i32 = offset.try_into().unwrap();
+    // offset *= (trampoline >= (address + 11)).then_some(1).unwrap_or(-1);
+    let offset = (trampoline as isize) - (address + 11) as isize;
+    let offset = offset.try_into().unwrap();
 
     let addr = ptr::null_mut::<u8>().with_addr(address);
 
     unsafe {
         addr.byte_add(2).cast::<u32>().write(0);
         addr.byte_add(6).write(CALL_OP_CODE);
-        addr.byte_add(7).cast::<u32>().write(offset);
+        addr.byte_add(7).cast::<i32>().write(offset);
         AtomicU16::from_ptr(addr.cast())
             .store(MOV_R10_SEQ, atomic::Ordering::Release);
     }
@@ -150,23 +194,26 @@ unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
 unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
     use std::sync::atomic::{ self, AtomicU16 };
     
-    const MOV_R10_SEQ: u16 = 0xba41;
     const JMP_OP_CODE: u8 = 0xe9;
+    const MOV_R10_SEQ: u16 = 0xba41;
 
     // TODO support more arch
     assert!(cfg!(target_arch = "x86_64"));
     
     let trampoline = slot as usize;
 
-    let offset = trampoline.checked_sub(address + 11).unwrap();
-    let offset: u32 = offset.try_into().unwrap();
+    // let offset = trampoline.abs_diff(address + 11);
+    // let mut offset: i32 = offset.try_into().unwrap();
+    // offset *= (trampoline >= (address + 11)).then_some(1).unwrap_or(-1);
+    let offset = (trampoline as isize) - (address + 11) as isize;
+    let offset = offset.try_into().unwrap();
 
     let addr = ptr::null_mut::<u8>().with_addr(address);
 
     unsafe {
         addr.byte_add(2).cast::<u32>().write(0);
         addr.byte_add(6).write(JMP_OP_CODE);
-        addr.byte_add(7).cast::<u32>().write(offset);
+        addr.byte_add(7).cast::<i32>().write(offset);
         AtomicU16::from_ptr(addr.cast())
             .store(MOV_R10_SEQ, atomic::Ordering::Release);
     }

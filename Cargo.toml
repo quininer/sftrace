@@ -12,7 +12,6 @@ libc = "0.2"
 quanta = "0.12"
 
 # xray patch
-ctor = "0.4"
 findshlibs = "0.10"
 object = "0.36"
 zerocopy = { version = "0.8", features = [ "derive" ] }
@@ -20,3 +19,4 @@ memmap2 = "0.9"
 
 [profile.release]
 panic = "abort"
+debug = true
