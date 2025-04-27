@@ -2,6 +2,7 @@ use std::sync::Mutex;
 use std::cell::RefCell;
 use quanta::Instant;
 use crate::util::thread_id;
+use crate::arch::{ Args, ReturnValue };
 
 
 pub(crate) struct GlobalEventList;
@@ -75,4 +76,12 @@ impl GlobalEventList {
         let mut list = GLOBAL.lock().unwrap();
         std::mem::take(&mut *list)
     }
+}
+
+pub extern "C" fn record_entry(parent: *const u8, child: *const u8, args: &Args) {
+    println!("entry");
+}
+
+pub extern "C" fn record_exit(return_value: &ReturnValue) {
+    println!("exit");
 }

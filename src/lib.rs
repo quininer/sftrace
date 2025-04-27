@@ -1,6 +1,6 @@
 mod util;
 mod events;
-mod record;
+mod arch;
 
 use std::ptr;
 use std::path::Path;
@@ -146,8 +146,8 @@ fn patch_xray(
         }
 
         unsafe {
-            patch_slot(entry_slot as *mut u8, record::xray_entry as usize);
-            patch_slot(exit_slot as *mut u8, record::xray_exit as usize);
+            patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
+            patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
         }        
     });    
 }
@@ -174,9 +174,6 @@ unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
     
     let trampoline = slot as usize;
 
-    // let offset = trampoline.abs_diff(address + 11);
-    // let mut offset: i32 = offset.try_into().unwrap();
-    // offset *= (trampoline >= (address + 11)).then_some(1).unwrap_or(-1);
     let offset = (trampoline as isize) - (address + 11) as isize;
     let offset = offset.try_into().unwrap();
 
@@ -202,9 +199,6 @@ unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
     
     let trampoline = slot as usize;
 
-    // let offset = trampoline.abs_diff(address + 11);
-    // let mut offset: i32 = offset.try_into().unwrap();
-    // offset *= (trampoline >= (address + 11)).then_some(1).unwrap_or(-1);
     let offset = (trampoline as isize) - (address + 11) as isize;
     let offset = offset.try_into().unwrap();
 
