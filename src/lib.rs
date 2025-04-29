@@ -1,4 +1,5 @@
 mod util;
+mod layout;
 mod events;
 mod arch;
 
@@ -41,7 +42,7 @@ fn patch_xray(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn()    
 ) {
-    use zerocopy::*;
+    use zerocopy::{ IntoBytes, FromBytes, Immutable, KnownLayout };
     use findshlibs::{ SharedLibrary, Segment };
 
     // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
@@ -101,8 +102,8 @@ fn patch_xray(
                 .write(true)
                 .open(path)
                 .expect("open output file failed");
-            let metadata = events::Metadata {
-                sign: *events::SIGN,
+            let metadata = layout::Metadata {
+                sign: *layout::SIGN,
                 base: (base.0 as u64).into()
             };
             fd.write_all(metadata.as_bytes()).unwrap();
