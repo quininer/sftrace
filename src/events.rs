@@ -1,5 +1,5 @@
-use std::io::Write;
 use std::ptr;
+use std::io::Write;
 use std::sync::LazyLock;
 use std::cell::RefCell;
 use quanta::Instant;
@@ -30,38 +30,46 @@ impl Drop for Local {
 }
 
 fn dur2u64(dur: std::time::Duration) -> u64 {
-    let secs = dur.as_secs();
-    let millis = dur.subsec_millis() as u64;
-    secs.saturating_mul(1000) + millis
+    dur.as_nanos() as u64
 }
 
 impl Local {
     pub fn record(&mut self, kind: Kind, parent_ip: *const u8, child_ip: *const u8) {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+        const _: () = [(); 1][std::mem::size_of::<Event>() - 29];
+        const CAP: usize = 4 * 1024 / std::mem::size_of::<Event>();
         
-        let call = Event {
+        let event = Event {
             kind,
             parent_ip: (parent_ip as u64).into(),
             child_ip: (child_ip as u64).into(),
-            time: (dur2u64(NOW.elapsed())).into(),
+            time: dur2u64(NOW.elapsed()).into(),
             tid: (*self.tid.get_or_insert_with(thread_id)).into(),
         };
 
         if self.events.capacity() == 0 {
-            self.events.reserve(4 * 1024);
+            self.reserve(CAP);
         }
 
-        if self.events.len() == 4 * 1024 {
+        if self.events.len() == CAP {
             self.flush();
         }
 
-        self.events.push(call);
+        self.events.push(event);
+    }
+
+    #[cold]
+    pub fn reserve(&mut self, n: usize) {
+        self.events.reserve(n);
     }
 
     pub fn flush(&mut self) {
         use crate::OUTPUT;
 
         let mut output = OUTPUT.get().unwrap();
+
+        // We assume that writes are atomic (<= 4k)
         output.write_all(self.events.as_bytes()).unwrap();
         self.events.clear();
     }

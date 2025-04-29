@@ -1,4 +1,4 @@
-use zerocopy::{ IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned, U64, I32, LE };
+use zerocopy::{ IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned, U64, I32, U32, LE };
 
 
 #[derive(FromBytes, Immutable, KnownLayout, Unaligned)]
@@ -12,12 +12,14 @@ pub struct LogFile {
 #[repr(C)]
 pub struct Metadata {
     pub sign: [u8; 8],
-    pub base: U64<LE>,
+    pub pid: U32<LE>,
+    pub shlib_base: U64<LE>,
 }
 
 pub const SIGN: &[u8; 8] = b"sf\0trace";
 
 #[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct Event {
     pub parent_ip: U64<LE>,
@@ -28,7 +30,7 @@ pub struct Event {
 }
 
 #[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(C)]
 pub struct Kind(u8);
 

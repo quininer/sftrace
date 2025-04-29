@@ -104,7 +104,8 @@ fn patch_xray(
                 .expect("open output file failed");
             let metadata = layout::Metadata {
                 sign: *layout::SIGN,
-                base: (base.0 as u64).into()
+                pid: std::process::id().into(),
+                shlib_base: (base.0 as u64).into()
             };
             fd.write_all(metadata.as_bytes()).unwrap();
             OUTPUT.set(fd).ok().expect("already initialized");

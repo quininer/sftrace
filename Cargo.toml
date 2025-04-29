@@ -13,6 +13,12 @@ name = "sftrace"
 # tools
 anyhow = "1"
 argh = "0.1"
+addr2line = "0.24"
+rayon = "1"
+flate2 = "1"
+prost = "0.13"
+micromegas-perfetto = "0.7"
+parking_lot = "0.12"
 
 # perf
 quanta = "0.12"
