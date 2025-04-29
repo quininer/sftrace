@@ -1,41 +1,53 @@
-use std::sync::Mutex;
+use std::io::Write;
+use std::ptr;
+use std::sync::LazyLock;
 use std::cell::RefCell;
 use quanta::Instant;
+use zerocopy::*;
 use crate::util::thread_id;
 use crate::arch::{ Args, ReturnValue };
 
 
-pub(crate) struct GlobalEventList;
-
-#[derive(Debug)]
-pub(crate) struct Call {
-    pub addr: Pointer,
-    pub time: Instant,
-    pub tid: libc::pid_t,
-    pub depth: u16,
-    pub r#return: bool,
+#[derive(IntoBytes, Immutable, Unaligned)]
+#[repr(C)]
+pub struct Metadata {
+    pub sign: [u8; 8],
+    pub base: U64<LE>,
 }
 
-#[derive(Debug)]
-pub struct Pointer(*const u8);
+pub const SIGN: &[u8; 8] = b"sf\0trace";
 
-unsafe impl Send for Pointer {}
+#[derive(IntoBytes, Immutable, Unaligned)]
+#[repr(C)]
+pub struct Event {
+    pub parent_ip: U64<LE>,
+    pub child_ip: U64<LE>,
+    pub time: U64<LE>,
+    pub tid: I32<LE>,
+    pub kind: Kind,
+}
+
+#[derive(IntoBytes, Immutable, Unaligned)]
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct Kind(u8);
+
+impl Kind {
+    pub const ENTRY: Kind = Kind(1);
+    pub const EXIT: Kind = Kind(2);
+
+    // malloc/free and more ...
+}
 
 struct Local {
     tid: Option<libc::pid_t>,
-    sp: *const u8,
-    depth: u16,
-    events: Vec<Call>
+    events: Vec<Event>
 }
-
-static GLOBAL: Mutex<Vec<Vec<Call>>> = Mutex::new(Vec::new());
 
 thread_local!{
     static LOCAL: RefCell<Local> = const {
         RefCell::new(Local {
             tid: None,
-            sp: std::ptr::null(),
-            depth: 0,
             events: Vec::new()
         })
     };
@@ -43,45 +55,64 @@ thread_local!{
 
 impl Drop for Local {
     fn drop(&mut self) {
-        let mut local = std::mem::take(&mut self.events);
-        local.shrink_to_fit();
-        let mut global = GLOBAL.lock().unwrap();
-        global.push(local);
+        self.flush();        
     }
 }
 
-impl GlobalEventList {
-    pub fn record(&self, callee: *const u8, sp: *const u8) {
-        LOCAL.with_borrow_mut(|local| {
-            let prev_sp = std::mem::replace(&mut local.sp, sp);
-            let r#return = prev_sp > sp;
+fn dur2u64(dur: std::time::Duration) -> u64 {
+    let secs = dur.as_secs();
+    let millis = dur.subsec_millis() as u64;
+    secs.saturating_mul(1000) + millis
+}
 
-            let call = Call {
-                addr: Pointer(callee),
-                time: Instant::now(),
-                tid: *local.tid.get_or_insert_with(thread_id),
-                depth: local.depth,
-                r#return
-            };
+impl Local {
+    pub fn record(&mut self, kind: Kind, parent_ip: *const u8, child_ip: *const u8) {
+        static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
+        
+        let call = Event {
+            kind,
+            parent_ip: U64::new(parent_ip as u64),
+            child_ip: U64::new(child_ip as u64),
+            time: U64::new(dur2u64(NOW.elapsed())),
+            tid: I32::new(*self.tid.get_or_insert_with(thread_id)),
+        };
 
-            match r#return {
-                false => local.depth += 1,
-                true => local.depth -= 1
-            }
-            local.events.push(call);
-        });
+        if self.events.capacity() == 0 {
+            self.events.reserve(4 * 1024);
+        }
+
+        if self.events.len() == 4 * 1024 {
+            self.flush();
+        }
+
+        self.events.push(call);
     }
 
-    pub fn take(&self) -> Vec<Vec<Call>> {
-        let mut list = GLOBAL.lock().unwrap();
-        std::mem::take(&mut *list)
+    pub fn flush(&mut self) {
+        use crate::OUTPUT;
+
+        let mut output = OUTPUT.get().unwrap();
+        output.write_all(self.events.as_bytes()).unwrap();
+        self.events.clear();
     }
 }
 
-pub extern "C" fn record_entry(parent: *const u8, child: *const u8, args: &Args) {
-    println!("entry");
+pub fn flush_current_thread() {
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.flush();
+        }
+    });
 }
 
-pub extern "C" fn record_exit(return_value: &ReturnValue) {
-    println!("exit");
+pub extern "C" fn record_entry(parent: *const u8, child: *const u8, _args: &Args) {
+    LOCAL.with_borrow_mut(|local| {
+        local.record(Kind::ENTRY, parent, child);
+    });
+}
+
+pub extern "C" fn record_exit(_return_value: &ReturnValue) {
+    LOCAL.with_borrow_mut(|local| {
+        local.record(Kind::EXIT, ptr::null(), ptr::null());
+    });    
 }

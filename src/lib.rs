@@ -2,9 +2,9 @@ mod util;
 mod events;
 mod arch;
 
-use std::ptr;
-use std::path::Path;
-use events::GlobalEventList;
+use std::io::Write;
+use std::{ ptr, fs };
+use std::sync::OnceLock;
 use object::{ Object, ObjectSection };
 use util::{ ScopeGuard, page_size };
 
@@ -20,6 +20,8 @@ pub extern "C" fn sftrace_setup(
 
     ONCE.call_once(|| init(entry_slot, exit_slot));
 }
+
+static OUTPUT: OnceLock<fs::File> = OnceLock::new();
 
 fn init(
     entry_slot: unsafe extern "C" fn(),
@@ -91,6 +93,22 @@ fn patch_xray(
             })
             else { return };
 
+        {
+            let path = std::env::var_os("SFTRACE_OUTPUT_FILE").expect("need SFTRACE_OUTPUT_FILE");
+            let mut fd = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(path)
+                .expect("open output file failed");
+            let metadata = events::Metadata {
+                sign: *events::SIGN,
+                base: (base.0 as u64).into()
+            };
+            fd.write_all(metadata.as_bytes()).unwrap();
+            OUTPUT.set(fd).ok().expect("already initialized");
+        }
+
         // unlock
         unsafe {
             if libc::mprotect(
@@ -98,8 +116,7 @@ fn patch_xray(
                 text_len,
                 libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
             ) != 0 {
-                eprintln!("text segment unlock failed");
-                std::process::abort();
+                panic!("text segment unlock failed: {:?}", std::io::Error::last_os_error());
             }
         }
 
@@ -110,8 +127,7 @@ fn patch_xray(
                 text_len,
                 libc::PROT_READ | libc::PROT_EXEC
             ) != 0 {
-                eprintln!("text segment lock failed");
-                std::process::abort();
+                panic!("text segment lock failed: {:?}", std::io::Error::last_os_error());
             }
         });
 
@@ -214,15 +230,5 @@ unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
 }
 
 extern "C" fn shutdown() {
-    use std::io::Write;
-
-    let outdir = std::env::var_os("SFTRACE_OUTPUT_DIR").unwrap();
-    let outdir = Path::new(&outdir);
-
-    std::fs::copy("/proc/self/maps", outdir.join("maps")).unwrap();
-
-    let list = GlobalEventList.take();
-    let mut fd = std::fs::File::create(outdir.join("logs")).unwrap();
-
-    write!(&mut fd, "{:#?}", list).unwrap();
+    events::flush_current_thread();
 }
