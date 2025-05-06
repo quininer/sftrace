@@ -42,7 +42,7 @@ fn patch_xray(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn()    
 ) {
-    use zerocopy::{ IntoBytes, FromBytes, Immutable, KnownLayout };
+    use zerocopy::{ FromBytes, Immutable, KnownLayout };
     use findshlibs::{ SharedLibrary, Segment };
 
     // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
@@ -66,6 +66,10 @@ fn patch_xray(
 
     findshlibs::TargetSharedLibrary::each(|shlib| {
         let base = shlib.actual_load_addr();
+        let shlibid = match shlib.id() {
+            Some(id) => id.as_bytes().to_owned(),
+            None => return,
+        };
 
         if !(base.0..base.0 + shlib.len()).contains(&(entry_slot as usize)) {
             return;
@@ -81,6 +85,13 @@ fn patch_xray(
             else { return };
         let Ok(buf) = xray_section.uncompressed_data()
             else { return };
+
+        if let Ok(Some(build_id)) = obj.build_id() {
+            if shlibid != build_id {
+                eprintln!("build id does not match: {:?} vs {:?}", shlibid, build_id);
+                return;
+            }
+        }
 
         let Some((text_addr, text_len)) = shlib.segments()
             .filter(|seg| seg.is_code() && seg.len() != 0)
@@ -103,11 +114,12 @@ fn patch_xray(
                 .open(path)
                 .expect("open output file failed");
             let metadata = layout::Metadata {
-                sign: *layout::SIGN,
+                shlibid,
                 pid: std::process::id().into(),
                 shlib_base: (base.0 as u64).into()
             };
-            fd.write_all(metadata.as_bytes()).unwrap();
+            fd.write_all(layout::SIGN).unwrap();
+            cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
             OUTPUT.set(fd).ok().expect("already initialized");
         }
 
@@ -158,7 +170,11 @@ fn patch_xray(
                     0 => patch_entry(address, entry_slot),
                     // exit
                     1 => patch_exit(address, exit_slot),
-                    _ => ()
+                    // tail call
+                    // 
+                    // We do not record tail calls, but process them through stack analysis
+                    2 => (),
+                    _ => eprintln!("unsupport kind: {}", entry.kind)
                 }
             }
         }

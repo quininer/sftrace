@@ -1,37 +1,38 @@
-use zerocopy::{ IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned, U64, I32, U32, LE };
+use serde::{ Serialize, Deserialize };
 
-
-#[derive(FromBytes, Immutable, KnownLayout, Unaligned)]
-#[repr(C)]
-pub struct LogFile {
-    pub metadata: Metadata,
-    pub events: [Event]
-}
-
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned)]
-#[repr(C)]
-pub struct Metadata {
-    pub sign: [u8; 8],
-    pub pid: U32<LE>,
-    pub shlib_base: U64<LE>,
-}
 
 pub const SIGN: &[u8; 8] = b"sf\0trace";
 
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned)]
-#[derive(Debug)]
-#[repr(C)]
-pub struct Event {
-    pub parent_ip: U64<LE>,
-    pub child_ip: U64<LE>,
-    pub time: U64<LE>,
-    pub tid: I32<LE>,
-    pub kind: Kind,
+#[derive(Serialize, Deserialize)]
+pub struct Metadata {
+    #[serde(with = "serde_bytes")]
+    pub shlibid: Vec<u8>,
+    pub pid: u32,
+    pub shlib_base: u64,
 }
 
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Unaligned)]
+#[derive(Serialize, Deserialize)]
+#[derive(Debug)]
+pub struct Event {
+    #[serde(rename = "k")]
+    pub kind: Kind,
+    #[serde(rename = "T")]
+    pub time: u64,
+    #[serde(rename = "t")]
+    pub tid: i32,
+    #[serde(rename = "p")]
+    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default)]
+    pub parent_ip: u64,
+    #[serde(rename = "c")]
+    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default)]
+    pub child_ip: u64,
+}
+
+#[derive(Serialize, Deserialize)]
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(C)]
+#[serde(transparent)] 
 pub struct Kind(u8);
 
 impl Kind {
@@ -41,3 +42,6 @@ impl Kind {
     // malloc/free and more ...
 }
 
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}

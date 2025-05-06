@@ -14,11 +14,10 @@ name = "sftrace"
 anyhow = "1"
 argh = "0.1"
 addr2line = "0.24"
-rayon = "1"
+bitflags = "2"
 flate2 = "1"
 prost = "0.13"
 micromegas-perfetto = "0.7"
-parking_lot = "0.12"
 
 # perf
 quanta = "0.12"
@@ -27,8 +26,13 @@ quanta = "0.12"
 libc = "0.2"
 findshlibs = "0.10"
 object = "0.36"
-zerocopy = { version = "0.8", features = [ "derive" ] }
 memmap2 = "0.9"
+
+# events
+zerocopy = { version = "0.8", features = [ "derive" ] }
+serde = { version = "1", features = [ "derive" ] }
+serde_bytes = "0.11"
+cbor4ii = { version = "1", features = [ "serde1", "use_std" ] }
 
 [profile.release]
 panic = "abort"

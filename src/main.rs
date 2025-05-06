@@ -1,16 +1,13 @@
 mod layout;
 
-use std::fs;
-use std::io::Write;
+use std::{fs, io};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::cell::RefCell;
 use std::collections::{ hash_map, HashMap, HashSet };
-use addr2line::fallible_iterator::FallibleIterator;
-use parking_lot::{ Mutex, RwLock };
 use anyhow::Context;
 use argh::FromArgs;
-use zerocopy::FromBytes;
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use object::Object;
 use prost::Message;
 use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation, trace_packet, track_event };
 
@@ -34,61 +31,104 @@ fn main() -> anyhow::Result<()> {
     let options: Options = argh::from_env();
 
     let log = fs::File::open(&options.path)?;
-    let log = unsafe {
-        memmap2::Mmap::map(&log)?
-    };
+    let mut log = io::BufReader::new(log);
 
     let loader = addr2line::Loader::new(&options.symbol)
         .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
     let loader = Addr2Line::new(loader);
 
-    let log = layout::LogFile::ref_from_bytes(log.as_ref())
-        .ok()
-        .context("log parse failed")?;
-    if log.metadata.sign != *layout::SIGN {
-        anyhow::bail!("not is sftrace log: {:?}", log.metadata.sign);
+    // check sign
+    {
+        let mut sign = [0; layout::SIGN.len()];
+        log.read_exact(&mut sign)?;
+        if &sign != layout::SIGN {
+            anyhow::bail!("not is sftrace log: {:?}", sign);
+        }
     }
-    let pid = log.metadata.pid.get().try_into().context("bad pid")?;
 
-    let state = GlobalState {
-        metadata: &log.metadata,
-        loader: &loader,
-        process_id: pid,
-        thread_stacks: Default::default()
+    let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
+    let pid = metadata.pid.try_into().context("bad pid")?;
+
+    let func_map = {
+        let symfd = fs::File::open(&options.symbol)?;
+        let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
+        let obj = object::File::parse(&*symbuf)?;    
+
+        if let Ok(Some(build_id)) = obj.build_id() {
+            if metadata.shlibid != build_id {
+                anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
+            }
+        }
+
+        FunctionEntryMap::from_obj(&obj)?
     };
 
     let output = fs::File::create(&options.output)?;
-    let output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
-    let output = Mutex::new(output);
+    let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
 
-    let last = &log.events;
+    let mut state = State {
+        metadata: &metadata,
+        loader: &loader,
+        process_id: pid,
+        stack: HashMap::new()
+    };
+    let mut packet = PacketWriter::default();
 
-    // let iter = log.events.chunks_exact(std::mem::size_of::<layout::Event>() * 1024);
-    // let last = iter.remainder();
+    while !log.fill_buf()?.is_empty() {
+        let event: layout::Event = cbor4ii::serde::from_reader(&mut log)?;
 
-    // iter.par_bridge()
-    //     .try_for_each(|chunk| process_chunk(&state, chunk, &output))?;
-    if !last.is_empty() {
-        process_chunk(&state, last, &output)?;
+        match event.kind {
+            layout::Kind::ENTRY => {
+                let stack = state.stack.entry(event.tid).or_default();
+                stack.push(event.child_ip);
+            },
+            layout::Kind::EXIT => {
+                let stack = state.stack.entry(event.tid).or_default();
+                if let Some(addr) = state.stack.get_mut(&event.tid).and_then(|stack| stack.pop()) {
+                    //
+                } else {
+                    eprintln!("missing entry event: {:?}", event);
+                }
+                
+            },
+            _ => (),
+        }
+        
+        packet.push(&mut state, &event);
+
+        if packet.trace.packet.len() == 1024 {
+            packet.flush_to(&mut output)?;
+        }
     }
 
-    let mut output = output.into_inner();
+    packet.flush_to(&mut output)?;
     output.flush()?;
 
     Ok(())    
 }
 
-struct GlobalState<'g> {
+struct State<'g> {
     #[allow(dead_code)]
     metadata: &'g layout::Metadata,
     loader: &'g Addr2Line,
     process_id: i32,
-    thread_stacks: RwLock<HashMap<i32, Arc<Mutex<Vec<u64>>>>>
+    stack: HashMap<i32, Vec<u64>>,
 }
 
 struct Addr2Line {
-    loader: Mutex<addr2line::Loader>,
-    cache: RwLock<HashMap<u64, Frame>>
+    loader: addr2line::Loader,
+    cache: RefCell<HashMap<u64, Option<Frame>>>
+}
+
+struct FunctionEntryMap(HashMap<u64, FunctionEntry>);
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+    struct FunctionEntry: u8 {
+        const ENTRY     = 0b00;
+        const EXIT      = 0b01;
+        const TAIL_CALL = 0b10;
+    }
 }
 
 #[derive(Clone)]
@@ -99,56 +139,59 @@ struct Frame {
 }
 
 #[derive(Default)]
-struct PacketState {
+struct PacketWriter {
     threads: HashSet<i32>,
     addrmap: HashMap<u64, (Option<u64>, Option<u64>)>,
     event_names: HashMap<String, u64>,
     source_locations: HashMap<(String, Option<u32>), u64>,
-    stack: Vec<u64>,
     trace: Trace,
 }
 
 impl Addr2Line {
     fn new(loader: addr2line::Loader) -> Self {
         Addr2Line {
-            loader: Mutex::new(loader),
-            cache: RwLock::new(HashMap::new())
+            loader,
+            cache: RefCell::new(HashMap::new())
         }
     }
 
     fn lookup(&self, addr: u64) -> Option<Frame> {
-        let cache = self.cache.upgradable_read();
-        if let Some(frame) = cache.get(&addr) {
-            return Some(frame.clone());
-        }
+        let mut cache = self.cache.borrow_mut();
 
-        let loader = self.loader.lock();
-        let frame = loader.find_frames(addr)
-            .ok()?
-            .next()
-            .ok()??;
-        let frame = Frame {
-            name: frame.function
-                .and_then(|name| name.demangle()
-                    .map(|name| name.into_owned())
+        match cache.entry(addr) {
+            hash_map::Entry::Occupied(entry) => entry.get().clone(),
+            hash_map::Entry::Vacant(entry) => {
+                let frame = self.loader.find_frames(addr)
                     .ok()
-                )
-                .unwrap_or_else(|| "unknown".into()),
-            file: frame.location
-                .as_ref()
-                .and_then(|loc| loc.file)
-                .map(|file| file.to_owned()),
-            line: frame.location.as_ref().and_then(|loc| loc.line),
-        };
-        let mut cache = parking_lot::RwLockUpgradableReadGuard::upgrade(cache);
-        cache.insert(addr, frame.clone());
-
-        Some(frame)
+                    .and_then(|mut iter| iter.next().ok())
+                    .flatten()
+                    .map(|frame| Frame {
+                        name: frame.function
+                            .and_then(|name| name.demangle()
+                                .map(|name| name.into_owned())
+                                .ok()
+                            )
+                            .unwrap_or_else(|| "unknown".into()),
+                        file: frame.location
+                            .as_ref()
+                            .and_then(|loc| loc.file)
+                            .map(|file| file.to_owned()),
+                        line: frame.location.as_ref().and_then(|loc| loc.line),
+                    });
+                entry.insert(frame).clone()
+            }
+        }
     }
 }
 
-impl PacketState {
-    fn process_uuid(&mut self, global_state: &GlobalState) -> u64 {
+impl FunctionEntryMap {
+    pub fn from_obj(obj: &object::File<'_>) -> anyhow::Result<Self> {
+        todo!()
+    }
+}
+
+impl PacketWriter {
+    fn process_uuid(&mut self, global_state: &State) -> u64 {
         let pid = global_state.process_id;
         
         if self.trace.packet.is_empty() {
@@ -167,9 +210,9 @@ impl PacketState {
         pid as u64        
     }
     
-    fn thread_uuid(&mut self, global_state: &GlobalState, event: &layout::Event) -> u64 {
+    fn thread_uuid(&mut self, global_state: &State, event: &layout::Event) -> u64 {
         let pid = self.process_uuid(global_state);
-        let tid = event.tid.get();
+        let tid = event.tid;
         
         if !self.threads.insert(tid) {
             let mut packet = micromegas_perfetto::writer::new_trace_packet();
@@ -187,13 +230,13 @@ impl PacketState {
         tid as u64
     }
 
-    fn frame_info(&mut self, global_state: &GlobalState, packet: &mut TracePacket, addr: u64)
+    fn frame_info(&mut self, global_state: &State, packet: &mut TracePacket, addr: u64)
         -> (Option<u64>, Option<u64>)
     {
         match self.addrmap.entry(addr) {
             hash_map::Entry::Occupied(entry) => return *entry.get(),
             hash_map::Entry::Vacant(entry) => {
-                let Some(frame) = global_state.loader.lookup(addr - global_state.metadata.shlib_base.get())
+                let Some(frame) = global_state.loader.lookup(addr - global_state.metadata.shlib_base)
                     else {
                         return *entry.insert((None, None));
                     };
@@ -240,30 +283,31 @@ impl PacketState {
         }
     }
     
-    fn push(&mut self, global_state: &GlobalState, event: &layout::Event) {
-        let thread_uuid = self.thread_uuid(global_state, event);
+    fn push(&mut self, state: &mut State, event: &layout::Event) {
+        let thread_uuid = self.thread_uuid(state, event);
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();
         let mut track_event = micromegas_perfetto::writer::new_track_event();
-        packet.timestamp = Some(event.time.get());
+        packet.timestamp = Some(event.time);
         track_event.track_uuid = Some(thread_uuid);
 
         match event.kind {
             layout::Kind::ENTRY => {
                 track_event.r#type = Some(track_event::Type::SliceBegin.into());
-                let addr = event.child_ip.get();
-                self.stack.push(addr);
-                let (name_id, loc_id) = self.frame_info(global_state, &mut packet, addr);
+                let addr = event.child_ip;
+                state.stack.entry(event.tid).or_default().push(addr);
+                let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
                 track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
             },
             layout::Kind::EXIT => {
                 track_event.r#type = Some(track_event::Type::SliceEnd.into());
-                // FIXME cross chunk stack
-                if let Some(addr) = self.stack.pop() {
-                    let (name_id, loc_id) = self.frame_info(global_state, &mut packet, addr);
+                if let Some(addr) = state.stack.get_mut(&event.tid).and_then(|stack| stack.pop()) {
+                    let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                     track_event.name_field = name_id.map(track_event::NameField::NameIid);
                     track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
+                } else {
+                    eprintln!("missing entry event: {:?}", event);
                 }
             },
             _ => ()
@@ -272,20 +316,19 @@ impl PacketState {
         packet.data = Some(trace_packet::Data::TrackEvent(track_event));
         self.trace.packet.push(packet);
     }
-}
 
-fn process_chunk<W: Write>(global_state: &GlobalState, chunk: &[layout::Event], output: &Mutex<W>) -> anyhow::Result<()> {
-    let mut state = PacketState::default();
-
-    for event in chunk {
-        state.push(global_state, event);    
+    fn flush_to<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        if self.trace.packet.is_empty() {
+            return Ok(());
+        }
+        
+        let buf = self.trace.encode_to_vec();
+        writer.write_all(&buf)?;
+        self.trace.packet.clear();
+        self.threads.clear();
+        self.addrmap.clear();
+        self.event_names.clear();
+        self.source_locations.clear();
+        Ok(())
     }
-
-    let trace = std::mem::take(&mut state.trace);
-    drop(state);
-    let buf = trace.encode_to_vec();
-    let mut output = output.lock();
-    output.write_all(&buf)?;
-
-    Ok(())
 }

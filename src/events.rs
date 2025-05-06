@@ -3,7 +3,6 @@ use std::io::Write;
 use std::sync::LazyLock;
 use std::cell::RefCell;
 use quanta::Instant;
-use zerocopy::IntoBytes;
 use crate::util::thread_id;
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
@@ -11,14 +10,16 @@ use crate::layout::*;
 
 struct Local {
     tid: Option<libc::pid_t>,
-    events: Vec<Event>
+    buf: Vec<u8>,
+    line: Vec<u8>,
 }
 
 thread_local!{
     static LOCAL: RefCell<Local> = const {
         RefCell::new(Local {
             tid: None,
-            events: Vec::new()
+            buf: Vec::new(),
+            line: Vec::new()
         })
     };
 }
@@ -37,31 +38,31 @@ impl Local {
     pub fn record(&mut self, kind: Kind, parent_ip: *const u8, child_ip: *const u8) {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-        const _: () = [(); 1][std::mem::size_of::<Event>() - 29];
-        const CAP: usize = 4 * 1024 / std::mem::size_of::<Event>();
+        const CAP: usize = 4 * 1024;
         
         let event = Event {
             kind,
-            parent_ip: (parent_ip as u64).into(),
-            child_ip: (child_ip as u64).into(),
-            time: dur2u64(NOW.elapsed()).into(),
-            tid: (*self.tid.get_or_insert_with(thread_id)).into(),
+            parent_ip: (parent_ip as u64),
+            child_ip: (child_ip as u64),
+            time: dur2u64(NOW.elapsed()),
+            tid: (*self.tid.get_or_insert_with(thread_id)),
         };
+        cbor4ii::serde::to_writer(&mut self.line, &event).unwrap();
 
-        if self.events.capacity() == 0 {
+        if self.buf.capacity() == 0 {
             self.reserve(CAP);
         }
 
-        if self.events.len() == CAP {
+        if self.buf.len() != 0 && self.buf.len() + self.line.len() > CAP {
             self.flush();
         }
 
-        self.events.push(event);
+        self.buf.append(&mut self.line);
     }
 
     #[cold]
-    pub fn reserve(&mut self, n: usize) {
-        self.events.reserve(n);
+    fn reserve(&mut self, n: usize) {
+        self.buf.reserve(n);
     }
 
     pub fn flush(&mut self) {
@@ -70,8 +71,8 @@ impl Local {
         let mut output = OUTPUT.get().unwrap();
 
         // We assume that writes are atomic (<= 4k)
-        output.write_all(self.events.as_bytes()).unwrap();
-        self.events.clear();
+        output.write_all(&self.buf).unwrap();
+        self.buf.clear();
     }
 }
 
