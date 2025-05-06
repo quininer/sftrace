@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{ hash_map, HashMap, HashSet };
 use anyhow::Context;
 use argh::FromArgs;
-use object::Object;
+use object::{Object, ObjectSection};
 use prost::Message;
 use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation, trace_packet, track_event };
 
@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        FunctionEntryMap::from_obj(&obj)?
+        FunctionEntryMap::from_obj(&obj, metadata.shlib_base)?
     };
 
     let output = fs::File::create(&options.output)?;
@@ -83,13 +83,27 @@ fn main() -> anyhow::Result<()> {
                 stack.push(event.child_ip);
             },
             layout::Kind::EXIT => {
-                let stack = state.stack.entry(event.tid).or_default();
-                if let Some(addr) = state.stack.get_mut(&event.tid).and_then(|stack| stack.pop()) {
-                    //
+                let mut is_empty = false;
+                if let Some(stack) = state.stack.get_mut(&event.tid) {
+                    stack.pop();
+
+                    while let Some(last) = stack.last() {
+                        let entry_flag = func_map.0.get(&last).unwrap();
+                        if entry_flag.contains(FunctionEntry::TAIL_CALL) {
+                            stack.pop();
+                        } else {
+                            break
+                        }
+                    }
+
+                    is_empty = stack.is_empty();
                 } else {
                     eprintln!("missing entry event: {:?}", event);
                 }
-                
+
+                if is_empty {
+                    state.stack.remove(&event.tid);
+                }
             },
             _ => (),
         }
@@ -185,8 +199,34 @@ impl Addr2Line {
 }
 
 impl FunctionEntryMap {
-    pub fn from_obj(obj: &object::File<'_>) -> anyhow::Result<Self> {
-        todo!()
+    pub fn from_obj(obj: &object::File<'_>, base: u64) -> anyhow::Result<Self> {
+        use zerocopy::FromBytes;
+        
+        let xray_section = obj.section_by_name("xray_instr_map").context("not found xray_instr_map section")?;
+        let buf = xray_section.uncompressed_data()?;
+        let base: usize = base.try_into()?;
+
+        let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref())
+            .ok()
+            .context("xray section map parse failed")?;
+        let section_offset: usize = xray_section.address().try_into().unwrap();
+        let mut output = HashMap::new();
+
+        for (_addr, func, entry) in layout::XRayInstrMap(entry_map)
+            .iter(base, section_offset)
+        {
+            let kind = match entry.kind {
+                0 => FunctionEntry::ENTRY,
+                1 => FunctionEntry::EXIT,
+                2 => FunctionEntry::TAIL_CALL,
+                _ => FunctionEntry::ENTRY,
+            };
+            
+            *output.entry(func as u64).or_insert(kind) |= kind;
+        }
+
+        output.shrink_to_fit();
+        Ok(FunctionEntryMap(output))
     }
 }
 

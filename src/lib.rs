@@ -42,25 +42,12 @@ fn patch_xray(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn()    
 ) {
-    use zerocopy::{ FromBytes, Immutable, KnownLayout };
+    use zerocopy::FromBytes;
     use findshlibs::{ SharedLibrary, Segment };
-
-    // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
-    #[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
-    #[repr(C)]
-    struct XRayFunctionEntry {
-        address: usize,
-        function: usize,
-        kind: u8,
-        always_instrument: u8,
-        version: u8,
-        padding: [u8; (4 * 8) - ((2 * 8) + 3)]
-    }
 
     const _ASSERT_ARCH: () = if !cfg!(target_pointer_width = "64") {
         panic!("64bit only")
     };
-    const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
 
     let page_size = page_size();
 
@@ -115,8 +102,8 @@ fn patch_xray(
                 .expect("open output file failed");
             let metadata = layout::Metadata {
                 shlibid,
-                pid: std::process::id().into(),
-                shlib_base: (base.0 as u64).into()
+                pid: std::process::id(),
+                shlib_base: base.0 as u64
             };
             fd.write_all(layout::SIGN).unwrap();
             cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
@@ -145,31 +132,19 @@ fn patch_xray(
             }
         });
 
-        let (entry_map, tail) = <[XRayFunctionEntry]>::ref_from_prefix_with_elems(
-            buf.as_ref(),
-            buf.len() / std::mem::size_of::<XRayFunctionEntry>()
-        ).unwrap();
-        assert!(tail.is_empty());
+        let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
+        let section_offset: usize = xray_section.address().try_into().unwrap();
 
-        for (i, entry) in entry_map.iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.version == 2)
+        for (addr, _func, entry) in layout::XRayInstrMap(entry_map)
+            .iter(base.0, section_offset)
         {
-            let section_offset: usize = xray_section.address().try_into().unwrap();
-            let entry_offset = section_offset + i * std::mem::size_of::<XRayFunctionEntry>();
-            
-            // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
-            // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199
-            let address = base.0 + entry_offset + entry.address;
-            let _function = base.0 + entry_offset + entry.address + std::mem::size_of::<usize>();
-
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
             unsafe {
                 match entry.kind {
                     // entry
-                    0 => patch_entry(address, entry_slot),
+                    0 => patch_entry(addr, entry_slot),
                     // exit
-                    1 => patch_exit(address, exit_slot),
+                    1 => patch_exit(addr, exit_slot),
                     // tail call
                     // 
                     // We do not record tail calls, but process them through stack analysis
