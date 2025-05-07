@@ -13,6 +13,21 @@ use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation
 /// sftrace tools
 #[derive(FromArgs)]
 struct Options {
+    #[argh(subcommand)]
+    subcmd: SubCommand,
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand)]
+enum SubCommand {
+    Convert(ConvertCommand),
+    Extract(ExtractCommand)
+}
+
+/// Convert command
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "convert")]
+struct ConvertCommand {
     /// sftrace trace path
     #[argh(positional)]
     path: PathBuf,
@@ -23,12 +38,36 @@ struct Options {
 
     /// chrome-trace output path
     #[argh(option, short = 'o')]
-    output: PathBuf,
+    output: PathBuf,    
+}
+
+/// Extract command
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "extract")]
+struct ExtractCommand {
+    /// object file
+    #[argh(positional)]
+    path: PathBuf,
+
+    /// filter by rlib
+    #[argh(option, short = 'r')]
+    rlibs: Option<String>,
+
+    /// filter-file output path
+    #[argh(option, short = 'o')]
+    output: PathBuf,    
 }
 
 fn main() -> anyhow::Result<()> {
     let options: Options = argh::from_env();
 
+    match options.subcmd {
+        SubCommand::Convert(cmd) => convert(&cmd),
+        SubCommand::Extract(cmd) => extract(&cmd)
+    }
+}
+
+fn convert(options: &ConvertCommand) -> anyhow::Result<()> {
     let log = fs::File::open(&options.path)?;
     let mut log = io::BufReader::new(log);
 
@@ -97,7 +136,7 @@ fn main() -> anyhow::Result<()> {
             packet.push(&mut state, &event, addr);
         }
 
-        if packet.trace.packet.len() == 1024 {
+        if packet.trace.packet.len() > 128 {
             packet.flush_to(&mut output)?;
         }
     }
@@ -106,6 +145,68 @@ fn main() -> anyhow::Result<()> {
     output.flush()?;
 
     Ok(())    
+}
+
+fn extract(options: &ExtractCommand) -> anyhow::Result<()> {
+    use std::fs;
+    use std::ffi::OsStr;
+    use object::{ Object, ObjectSymbol };
+    use rayon::prelude::*;
+    use zerocopy::IntoBytes;
+
+    let objfd = fs::File::open(&options.path)?;
+    let objbuf = unsafe { memmap2::Mmap::map(&objfd)? };
+    let obj = object::File::parse(&*objbuf)?;
+
+    if let Some(rlibs) = options.rlibs.as_ref() {
+        let obj = &obj;
+        
+        let mut map = glob::glob(rlibs)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.extension() == Some(OsStr::new("rlib")))
+            .par_bridge()
+            .filter_map(|entry| {
+                eprintln!("load {:?}", entry);
+
+                fs::File::open(&entry).ok()
+            })
+            .map(|fd| {
+                let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
+                let rlib = object::read::archive::ArchiveFile::parse(&*buf).unwrap();
+                let syms = rlib.symbols().unwrap();
+
+                syms.into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                    .par_bridge()
+                    .filter_map(|sym| {
+                        obj.symbol_by_name_bytes(sym.name())
+                            .filter(|sym| matches!(sym.kind(), object::SymbolKind::Text))
+                            .filter(|sym| sym.is_definition())
+                            .map(|sym| sym.address())
+                    })
+                    .collect::<Vec<u64>>()
+            })
+            .reduce(Vec::new, |mut sum, mut next| {
+                sum.append(&mut next);
+                sum
+            });
+        map.par_sort();
+        map.dedup();
+
+        println!("done {:?}", map.len());
+
+        let mut output = fs::File::create(&options.output)?;
+        let hash = obj.build_id()
+            .ok()
+            .flatten()
+            .map(layout::FilterMap::build_id_hash)
+            .unwrap_or_default();
+        output.write_all(&hash.to_ne_bytes())?;
+        output.write_all(map.as_bytes())?;
+    }
+
+    Ok(())   
 }
 
 struct State<'g> {

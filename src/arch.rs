@@ -1,4 +1,4 @@
-//! https://github.com/namhyung/uftrace/blob/master/arch/x86_64/xray.S
+//! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.4/compiler-rt/lib/xray/xray_trampoline_x86_64.S
 
 use crate::events::{ record_entry, record_exit, record_tailcall };
 

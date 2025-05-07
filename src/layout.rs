@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use serde::{ Serialize, Deserialize };
+use zerocopy::{ FromBytes, Immutable, KnownLayout };
 
 pub const SIGN: &[u8; 8] = b"sf\0trace";
 
@@ -42,4 +43,45 @@ impl Kind {
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
+}
+
+#[derive(FromBytes, Immutable, KnownLayout)]
+#[repr(C)]
+pub struct FilterMap {
+    build_id_hash: u64,
+    map: [u64]
+}
+
+#[allow(dead_code)]
+impl FilterMap {
+    pub fn build_id_hash(build_id: &[u8]) -> u64 {
+        use siphasher::sip::SipHasher24;
+
+        SipHasher24::new().hash(build_id)
+    }
+    
+    pub fn parse<'map>(buf: &'map [u8], build_id: Option<&[u8]>) -> anyhow::Result<&'map FilterMap> {
+        use anyhow::Context;
+        
+        let map = <FilterMap>::ref_from_bytes(buf)
+            .ok()
+            .context("filter map parse failed")?;
+
+        if let Some(build_id) = build_id {
+            let hash = Self::build_id_hash(build_id);
+
+            if hash != map.build_id_hash {
+                anyhow::bail!(
+                    "filtermap build id hash does not match: {:?} vs {:?}",
+                    hash, map.build_id_hash
+                );
+            }
+        }
+
+        Ok(map)
+    }
+    
+    pub fn check(&self, addr: u64) -> bool {
+        self.map.binary_search(&addr).is_ok()
+    }
 }

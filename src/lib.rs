@@ -84,6 +84,18 @@ fn patch_xray(
             }
         }
 
+        let mut maybe_filter_buf = None;
+        if let Ok(path) = std::env::var("SFTRACE_FILTER") {
+            let fd = fs::File::open(&path).unwrap();
+            let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
+            maybe_filter_buf = Some(buf);
+        }
+        let maybe_filter = if let Some(buf) = maybe_filter_buf.as_ref() {
+            Some(layout::FilterMap::parse(&buf, obj.build_id().ok().flatten()).unwrap())
+        } else {
+            None
+        };
+
         let Some((text_addr, text_len)) = shlib.segments()
             .filter(|seg| seg.is_code() && seg.len() != 0)
             .map(|seg| (seg.actual_virtual_memory_address(shlib), seg.len()))
@@ -99,9 +111,8 @@ fn patch_xray(
         {
             let path = std::env::var_os("SFTRACE_OUTPUT_FILE").expect("need SFTRACE_OUTPUT_FILE");
             let mut fd = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
+                .create_new(true)
+                .append(true)
                 .open(path)
                 .expect("open output file failed");
             let metadata = layout::Metadata {
@@ -140,9 +151,15 @@ fn patch_xray(
         let entry_map = <[XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
         let section_offset: usize = xray_section.address().try_into().unwrap();
 
-        for (addr, _func, entry) in XRayInstrMap(entry_map)
+        for (addr, func, entry) in XRayInstrMap(entry_map)
             .iter(base.0, section_offset)
         {
+            if let Some(filter) = maybe_filter {
+                if !filter.check((func - base.0).try_into().unwrap()) {
+                    continue
+                }
+            }
+            
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
             unsafe {
                 match entry.kind {
@@ -161,7 +178,7 @@ fn patch_xray(
             patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
             patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
             patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
-        }        
+        }
     });    
 }
 
@@ -234,21 +251,21 @@ extern "C" fn shutdown() {
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
 #[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
 #[repr(C)]
-pub struct XRayFunctionEntry {
-    pub address: usize,
-    pub function: usize,
-    pub kind: u8,
-    pub always_instrument: u8,
-    pub version: u8,
+struct XRayFunctionEntry {
+    address: usize,
+    function: usize,
+    kind: u8,
+    always_instrument: u8,
+    version: u8,
     padding: [u8; (4 * 8) - ((2 * 8) + 3)]
 }
 
 const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
 
-pub struct XRayInstrMap<'a>(pub &'a [XRayFunctionEntry]);
+struct XRayInstrMap<'a>(&'a [XRayFunctionEntry]);
 
 impl XRayInstrMap<'_> {
-    pub fn iter(&self, base: usize, section_offset: usize) -> impl Iterator<Item = (usize, usize, &'_ XRayFunctionEntry)> + '_ {
+    fn iter(&self, base: usize, section_offset: usize) -> impl Iterator<Item = (usize, usize, &'_ XRayFunctionEntry)> + '_ {
         const ENTRY_SIZE: usize = std::mem::size_of::<XRayFunctionEntry>();
         
         self.0.iter()
