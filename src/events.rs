@@ -35,14 +35,13 @@ fn dur2u64(dur: std::time::Duration) -> u64 {
 }
 
 impl Local {
-    pub fn record(&mut self, kind: Kind, parent_ip: *const u8, child_ip: *const u8) {
+    pub fn record(&mut self, kind: Kind, child_ip: *const u8) {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
         const CAP: usize = 4 * 1024;
         
         let event = Event {
             kind,
-            parent_ip: (parent_ip as u64),
             child_ip: (child_ip as u64),
             time: dur2u64(NOW.elapsed()),
             tid: (*self.tid.get_or_insert_with(thread_id)),
@@ -84,14 +83,20 @@ pub fn flush_current_thread() {
     });
 }
 
-pub extern "C" fn record_entry(parent: *const u8, child: *const u8, _args: &Args) {
+pub extern "C" fn record_entry(child: *const u8, _args: &Args) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, parent, child);
+        local.record(Kind::ENTRY, child);
     });
 }
 
 pub extern "C" fn record_exit(_return_value: &ReturnValue) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null(), ptr::null());
+        local.record(Kind::EXIT, ptr::null());
+    });    
+}
+
+pub extern "C" fn record_tailcall(child: *const u8) {
+    LOCAL.with_borrow_mut(|local| {
+        local.record(Kind::TAIL_CALL, child);
     });    
 }

@@ -383,7 +383,6 @@ dependencies = [
  "addr2line",
  "anyhow",
  "argh",
- "bitflags",
  "cbor4ii",
  "findshlibs",
  "flate2",

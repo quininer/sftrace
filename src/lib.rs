@@ -6,29 +6,33 @@ mod arch;
 use std::io::Write;
 use std::{ ptr, fs };
 use std::sync::OnceLock;
+use std::sync::atomic::{ self, AtomicU16 };
 use object::{ Object, ObjectSection };
+use zerocopy::{ FromBytes, Immutable, KnownLayout };
 use util::{ ScopeGuard, page_size };
 
 
 #[no_mangle]
 pub extern "C" fn sftrace_setup(
     entry_slot: unsafe extern "C" fn(),
-    exit_slot: unsafe extern "C" fn()    
+    exit_slot: unsafe extern "C" fn(),
+    tailcall_slot: unsafe extern "C" fn(),
 ) {
     use std::sync::Once;
 
     static ONCE: Once = Once::new();
 
-    ONCE.call_once(|| init(entry_slot, exit_slot));
+    ONCE.call_once(|| init(entry_slot, exit_slot, tailcall_slot));
 }
 
 static OUTPUT: OnceLock<fs::File> = OnceLock::new();
 
 fn init(
     entry_slot: unsafe extern "C" fn(),
-    exit_slot: unsafe extern "C" fn()    
+    exit_slot: unsafe extern "C" fn(),
+    tailcall_slot: unsafe extern "C" fn(),
 ) {
-    patch_xray(entry_slot, exit_slot);
+    patch_xray(entry_slot, exit_slot, tailcall_slot);
     
     unsafe {
         match libc::atexit(shutdown) {
@@ -40,9 +44,9 @@ fn init(
 
 fn patch_xray(
     entry_slot: unsafe extern "C" fn(),
-    exit_slot: unsafe extern "C" fn()    
+    exit_slot: unsafe extern "C" fn(),
+    tailcall_slot: unsafe extern "C" fn(),
 ) {
-    use zerocopy::FromBytes;
     use findshlibs::{ SharedLibrary, Segment };
 
     const _ASSERT_ARCH: () = if !cfg!(target_pointer_width = "64") {
@@ -103,7 +107,8 @@ fn patch_xray(
             let metadata = layout::Metadata {
                 shlibid,
                 pid: std::process::id(),
-                shlib_base: base.0 as u64
+                shlib_base: base.0 as u64,
+                shlib_path: shlib.name().into()
             };
             fd.write_all(layout::SIGN).unwrap();
             cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
@@ -132,10 +137,10 @@ fn patch_xray(
             }
         });
 
-        let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
+        let entry_map = <[XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
         let section_offset: usize = xray_section.address().try_into().unwrap();
 
-        for (addr, _func, entry) in layout::XRayInstrMap(entry_map)
+        for (addr, _func, entry) in XRayInstrMap(entry_map)
             .iter(base.0, section_offset)
         {
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
@@ -146,9 +151,7 @@ fn patch_xray(
                     // exit
                     1 => patch_exit(addr, exit_slot),
                     // tail call
-                    // 
-                    // We do not record tail calls, but process them through stack analysis
-                    2 => (),
+                    2 => patch_tailcall(addr, tailcall_slot),
                     _ => eprintln!("unsupport kind: {}", entry.kind)
                 }
             }
@@ -157,6 +160,7 @@ fn patch_xray(
         unsafe {
             patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
             patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
+            patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
         }        
     });    
 }
@@ -173,8 +177,6 @@ unsafe fn patch_slot(slot: *mut u8, target: usize) {
 
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
 unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
-    use std::sync::atomic::{ self, AtomicU16 };
-
     const CALL_OP_CODE: u8 = 0xe8;
     const MOV_R10_SEQ: u16 = 0xba41;
 
@@ -198,8 +200,6 @@ unsafe fn patch_entry(address: usize, slot: unsafe extern "C" fn()) {
 }
 
 unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
-    use std::sync::atomic::{ self, AtomicU16 };
-    
     const JMP_OP_CODE: u8 = 0xe9;
     const MOV_R10_SEQ: u16 = 0xba41;
 
@@ -222,6 +222,47 @@ unsafe fn patch_exit(address: usize, slot: unsafe extern "C" fn()) {
     }
 }
 
+// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L224
+unsafe fn patch_tailcall(address: usize, slot: unsafe extern "C" fn()) {
+    patch_entry(address, slot);
+}
+
 extern "C" fn shutdown() {
     events::flush_current_thread();
+}
+
+// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
+#[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
+#[repr(C)]
+pub struct XRayFunctionEntry {
+    pub address: usize,
+    pub function: usize,
+    pub kind: u8,
+    pub always_instrument: u8,
+    pub version: u8,
+    padding: [u8; (4 * 8) - ((2 * 8) + 3)]
+}
+
+const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
+
+pub struct XRayInstrMap<'a>(pub &'a [XRayFunctionEntry]);
+
+impl XRayInstrMap<'_> {
+    pub fn iter(&self, base: usize, section_offset: usize) -> impl Iterator<Item = (usize, usize, &'_ XRayFunctionEntry)> + '_ {
+        const ENTRY_SIZE: usize = std::mem::size_of::<XRayFunctionEntry>();
+        
+        self.0.iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.version == 2)
+            .map(move |(i, entry)| {
+                let entry_offset = section_offset + i * ENTRY_SIZE;
+
+                // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
+                // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199                
+                let address = base + entry_offset + entry.address;
+                let function = base + entry_offset + entry.function + std::mem::size_of::<usize>();
+
+                (address, function, entry)
+            })
+    }
 }

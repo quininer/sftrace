@@ -1,13 +1,12 @@
 mod layout;
 
-use std::{fs, io};
-use std::io::{BufRead, Read, Write};
+use std::{ fs, io };
+use std::io::{ BufRead, Read, Write };
 use std::path::PathBuf;
 use std::cell::RefCell;
 use std::collections::{ hash_map, HashMap, HashSet };
 use anyhow::Context;
 use argh::FromArgs;
-use object::{Object, ObjectSection};
 use prost::Message;
 use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation, trace_packet, track_event };
 
@@ -20,7 +19,7 @@ struct Options {
 
     /// debug symbol path
     #[argh(option, short = 's')]
-    symbol: PathBuf,
+    symbol: Option<PathBuf>,
 
     /// chrome-trace output path
     #[argh(option, short = 'o')]
@@ -32,10 +31,6 @@ fn main() -> anyhow::Result<()> {
 
     let log = fs::File::open(&options.path)?;
     let mut log = io::BufReader::new(log);
-
-    let loader = addr2line::Loader::new(&options.symbol)
-        .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
-    let loader = Addr2Line::new(loader);
 
     // check sign
     {
@@ -49,19 +44,11 @@ fn main() -> anyhow::Result<()> {
     let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
     let pid = metadata.pid.try_into().context("bad pid")?;
 
-    let func_map = {
-        let symfd = fs::File::open(&options.symbol)?;
-        let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
-        let obj = object::File::parse(&*symbuf)?;    
+    let sympath = options.symbol.as_ref().unwrap_or(&metadata.shlib_path);
 
-        if let Ok(Some(build_id)) = obj.build_id() {
-            if metadata.shlibid != build_id {
-                anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
-            }
-        }
-
-        FunctionEntryMap::from_obj(&obj, metadata.shlib_base)?
-    };
+    let loader = addr2line::Loader::new(sympath)
+        .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
+    let loader = Addr2Line::new(loader);
 
     let output = fs::File::create(&options.output)?;
     let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
@@ -77,38 +64,38 @@ fn main() -> anyhow::Result<()> {
     while !log.fill_buf()?.is_empty() {
         let event: layout::Event = cbor4ii::serde::from_reader(&mut log)?;
 
-        match event.kind {
+        let maybe_addr = match event.kind {
             layout::Kind::ENTRY => {
-                let stack = state.stack.entry(event.tid).or_default();
-                stack.push(event.child_ip);
+                let addr = event.child_ip - metadata.shlib_base;
+                state.stack.entry(event.tid).or_default().push(addr);
+                Some(addr)
             },
-            layout::Kind::EXIT => {
+            layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                 let mut is_empty = false;
-                if let Some(stack) = state.stack.get_mut(&event.tid) {
-                    stack.pop();
 
-                    while let Some(last) = stack.last() {
-                        let entry_flag = func_map.0.get(&last).unwrap();
-                        if entry_flag.contains(FunctionEntry::TAIL_CALL) {
-                            stack.pop();
-                        } else {
-                            break
-                        }
-                    }
+                let maybe_addr = state.stack.get_mut(&event.tid)
+                    .and_then(|stack| {
+                        let last = stack.pop();
+                        is_empty = stack.is_empty();
+                        last
+                    });
 
-                    is_empty = stack.is_empty();
-                } else {
+                if maybe_addr.is_none() {
                     eprintln!("missing entry event: {:?}", event);
                 }
 
                 if is_empty {
                     state.stack.remove(&event.tid);
                 }
+
+                maybe_addr
             },
-            _ => (),
+            _ => None,
+        };
+
+        if let Some(addr) = maybe_addr {
+            packet.push(&mut state, &event, addr);
         }
-        
-        packet.push(&mut state, &event);
 
         if packet.trace.packet.len() == 1024 {
             packet.flush_to(&mut output)?;
@@ -132,17 +119,6 @@ struct State<'g> {
 struct Addr2Line {
     loader: addr2line::Loader,
     cache: RefCell<HashMap<u64, Option<Frame>>>
-}
-
-struct FunctionEntryMap(HashMap<u64, FunctionEntry>);
-
-bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
-    struct FunctionEntry: u8 {
-        const ENTRY     = 0b00;
-        const EXIT      = 0b01;
-        const TAIL_CALL = 0b10;
-    }
 }
 
 #[derive(Clone)]
@@ -198,38 +174,6 @@ impl Addr2Line {
     }
 }
 
-impl FunctionEntryMap {
-    pub fn from_obj(obj: &object::File<'_>, base: u64) -> anyhow::Result<Self> {
-        use zerocopy::FromBytes;
-        
-        let xray_section = obj.section_by_name("xray_instr_map").context("not found xray_instr_map section")?;
-        let buf = xray_section.uncompressed_data()?;
-        let base: usize = base.try_into()?;
-
-        let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref())
-            .ok()
-            .context("xray section map parse failed")?;
-        let section_offset: usize = xray_section.address().try_into().unwrap();
-        let mut output = HashMap::new();
-
-        for (_addr, func, entry) in layout::XRayInstrMap(entry_map)
-            .iter(base, section_offset)
-        {
-            let kind = match entry.kind {
-                0 => FunctionEntry::ENTRY,
-                1 => FunctionEntry::EXIT,
-                2 => FunctionEntry::TAIL_CALL,
-                _ => FunctionEntry::ENTRY,
-            };
-            
-            *output.entry(func as u64).or_insert(kind) |= kind;
-        }
-
-        output.shrink_to_fit();
-        Ok(FunctionEntryMap(output))
-    }
-}
-
 impl PacketWriter {
     fn process_uuid(&mut self, global_state: &State) -> u64 {
         let pid = global_state.process_id;
@@ -276,7 +220,7 @@ impl PacketWriter {
         match self.addrmap.entry(addr) {
             hash_map::Entry::Occupied(entry) => return *entry.get(),
             hash_map::Entry::Vacant(entry) => {
-                let Some(frame) = global_state.loader.lookup(addr - global_state.metadata.shlib_base)
+                let Some(frame) = global_state.loader.lookup(addr)
                     else {
                         return *entry.insert((None, None));
                     };
@@ -323,7 +267,7 @@ impl PacketWriter {
         }
     }
     
-    fn push(&mut self, state: &mut State, event: &layout::Event) {
+    fn push(&mut self, state: &mut State, event: &layout::Event, addr: u64) {
         let thread_uuid = self.thread_uuid(state, event);
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();
@@ -334,21 +278,15 @@ impl PacketWriter {
         match event.kind {
             layout::Kind::ENTRY => {
                 track_event.r#type = Some(track_event::Type::SliceBegin.into());
-                let addr = event.child_ip;
-                state.stack.entry(event.tid).or_default().push(addr);
                 let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
                 track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
             },
-            layout::Kind::EXIT => {
+            layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                 track_event.r#type = Some(track_event::Type::SliceEnd.into());
-                if let Some(addr) = state.stack.get_mut(&event.tid).and_then(|stack| stack.pop()) {
-                    let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
-                    track_event.name_field = name_id.map(track_event::NameField::NameIid);
-                    track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
-                } else {
-                    eprintln!("missing entry event: {:?}", event);
-                }
+                let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
+                track_event.name_field = name_id.map(track_event::NameField::NameIid);
+                track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
             },
             _ => ()
         }
