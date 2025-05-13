@@ -15,24 +15,40 @@ use util::{ ScopeGuard, page_size };
 #[no_mangle]
 pub extern "C" fn sftrace_setup(
     entry_slot: unsafe extern "C" fn(),
+    entry_log_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
+    exit_log_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
 ) {
     use std::sync::Once;
 
     static ONCE: Once = Once::new();
 
-    ONCE.call_once(|| init(entry_slot, exit_slot, tailcall_slot));
+    ONCE.call_once(|| init(
+        entry_slot,
+        entry_log_slot,
+        exit_slot,
+        exit_log_slot,
+        tailcall_slot
+    ));
 }
 
 static OUTPUT: OnceLock<fs::File> = OnceLock::new();
 
 fn init(
     entry_slot: unsafe extern "C" fn(),
+    entry_log_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
+    exit_log_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
 ) {
-    patch_xray(entry_slot, exit_slot, tailcall_slot);
+    patch_xray(
+        entry_slot,
+        entry_log_slot,
+        exit_slot,
+        exit_log_slot,
+        tailcall_slot
+    );
     
     unsafe {
         match libc::atexit(shutdown) {
@@ -44,7 +60,9 @@ fn init(
 
 fn patch_xray(
     entry_slot: unsafe extern "C" fn(),
+    entry_log_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
+    exit_log_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
 ) {
     use findshlibs::{ SharedLibrary, Segment };
@@ -121,24 +139,22 @@ fn patch_xray(
                 shlib_base: base.0 as u64,
                 shlib_path: shlib.name().into()
             };
-            fd.write_all(layout::SIGN).unwrap();
+            fd.write_all(layout::SIGN_TRACE).unwrap();
             cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
             OUTPUT.set(fd).ok().expect("already initialized");
         }
 
-        // unlock
-        unsafe {
+        let _guard = ScopeGuard(unsafe {
+            // unlock page protect
             if libc::mprotect(
                 text_addr as *mut _,
                 text_len,
                 libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
             ) != 0 {
                 panic!("text segment unlock failed: {:?}", std::io::Error::last_os_error());
-            }
-        }
-
-        // lock it back
-        let _guard = ScopeGuard((), |_| unsafe {
+            }            
+        }, |_| unsafe {
+            // lock back
             if libc::mprotect(
                 text_addr as *mut _,
                 text_len,
@@ -154,9 +170,14 @@ fn patch_xray(
         for (addr, func, entry) in XRayInstrMap(entry_map)
             .iter(base.0, section_offset)
         {
+            let mut enable_log = false;
             if let Some(filter) = maybe_filter {
-                if !filter.check((func - base.0).try_into().unwrap()) {
-                    continue
+                match (filter.mode(), filter.check((func - base.0) as u64)) {
+                    (layout::FilterMode::MARK, Some(mark)) => enable_log = mark.log(),
+                    (layout::FilterMode::MARK, _) => (),
+                    (layout::FilterMode::FILTER, Some(mark)) => enable_log = mark.log(),
+                    (layout::FilterMode::FILTER, None) => continue,
+                    (..) => continue
                 }
             }
             
@@ -164,8 +185,10 @@ fn patch_xray(
             unsafe {
                 match entry.kind {
                     // entry
+                    0 if enable_log => patch_entry(addr, entry_log_slot),
                     0 => patch_entry(addr, entry_slot),
                     // exit
+                    1 if enable_log => patch_exit(addr, exit_log_slot),
                     1 => patch_exit(addr, exit_slot),
                     // tail call
                     2 => patch_tailcall(addr, tailcall_slot),
@@ -176,7 +199,9 @@ fn patch_xray(
 
         unsafe {
             patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
+            patch_slot(entry_log_slot as *mut u8, arch::xray_entry_log as usize);
             patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
+            patch_slot(exit_log_slot as *mut u8, arch::xray_exit_log as usize);
             patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
         }
     });    

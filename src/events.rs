@@ -1,8 +1,8 @@
 use std::ptr;
 use std::io::Write;
-use std::sync::LazyLock;
+use std::time::Instant;
 use std::cell::RefCell;
-use quanta::Instant;
+use std::sync::LazyLock;
 use crate::util::thread_id;
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
@@ -35,16 +35,24 @@ fn dur2u64(dur: std::time::Duration) -> u64 {
 }
 
 impl Local {
-    pub fn record(&mut self, kind: Kind, child_ip: *const u8) {
+    #[inline]
+    pub fn record(
+        &mut self,
+        kind: Kind,
+        child_ip: *const u8,
+        args: Option<&Args>,
+        return_value: Option<&ReturnValue>,
+    ) {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
         const CAP: usize = 4 * 1024;
         
-        let event = Event {
+        let event: Event<&Args, &ReturnValue> = Event {
             kind,
             child_ip: (child_ip as u64),
             time: dur2u64(NOW.elapsed()),
             tid: (*self.tid.get_or_insert_with(thread_id)),
+            args, return_value
         };
         cbor4ii::serde::to_writer(&mut self.line, &event).unwrap();
 
@@ -83,20 +91,32 @@ pub fn flush_current_thread() {
     });
 }
 
-pub extern "C" fn record_entry(child: *const u8, _args: &Args) {
+pub extern "C" fn record_entry(child: *const u8) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, child);
+        local.record(Kind::ENTRY, child, None, None);
     });
 }
 
-pub extern "C" fn record_exit(_return_value: &ReturnValue) {
+pub extern "C" fn record_exit() {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null());
+        local.record(Kind::EXIT, ptr::null(), None, None);
     });    
 }
 
-pub extern "C" fn record_tailcall(child: *const u8) {
+pub extern "C" fn record_tailcall() {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::TAIL_CALL, child);
+        local.record(Kind::TAIL_CALL, ptr::null(), None, None);
+    });    
+}
+
+pub extern "C" fn record_entry_log(child: *const u8, args: &Args) {
+    LOCAL.with_borrow_mut(|local| {
+        local.record(Kind::ENTRY, child, Some(args), None);
+    });
+}
+
+pub extern "C" fn record_exit_log(return_value: &ReturnValue) {
+    LOCAL.with_borrow_mut(|local| {
+        local.record(Kind::EXIT, ptr::null(), None, Some(return_value));
     });    
 }

@@ -1,33 +1,20 @@
-mod layout;
-
 use std::{ fs, io };
 use std::io::{ BufRead, Read, Write };
 use std::path::PathBuf;
 use std::cell::RefCell;
 use std::collections::{ hash_map, HashMap, HashSet };
-use anyhow::Context;
 use argh::FromArgs;
+use anyhow::Context;
+use serde::Deserialize;
 use prost::Message;
 use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation, trace_packet, track_event };
-
-/// sftrace tools
-#[derive(FromArgs)]
-struct Options {
-    #[argh(subcommand)]
-    subcmd: SubCommand,
-}
-
-#[derive(FromArgs, PartialEq, Debug)]
-#[argh(subcommand)]
-enum SubCommand {
-    Convert(ConvertCommand),
-    Extract(ExtractCommand)
-}
+use crate::layout;
+use crate::util::VecMap;
 
 /// Convert command
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "convert")]
-struct ConvertCommand {
+pub struct SubCommand {
     /// sftrace trace path
     #[argh(positional)]
     path: PathBuf,
@@ -41,172 +28,90 @@ struct ConvertCommand {
     output: PathBuf,    
 }
 
-/// Extract command
-#[derive(FromArgs, PartialEq, Debug)]
-#[argh(subcommand, name = "extract")]
-struct ExtractCommand {
-    /// object file
-    #[argh(positional)]
-    path: PathBuf,
+#[derive(Deserialize, Debug)]
+#[serde(transparent)] 
+pub struct Data(VecMap<String, u128>);
 
-    /// filter by rlib
-    #[argh(option, short = 'r')]
-    rlibs: Option<String>,
+impl SubCommand {
+    pub fn exec(&self) -> anyhow::Result<()> {
+        let log = fs::File::open(&self.path)?;
+        let mut log = io::BufReader::new(log);
 
-    /// filter-file output path
-    #[argh(option, short = 'o')]
-    output: PathBuf,    
-}
-
-fn main() -> anyhow::Result<()> {
-    let options: Options = argh::from_env();
-
-    match options.subcmd {
-        SubCommand::Convert(cmd) => convert(&cmd),
-        SubCommand::Extract(cmd) => extract(&cmd)
-    }
-}
-
-fn convert(options: &ConvertCommand) -> anyhow::Result<()> {
-    let log = fs::File::open(&options.path)?;
-    let mut log = io::BufReader::new(log);
-
-    // check sign
-    {
-        let mut sign = [0; layout::SIGN.len()];
-        log.read_exact(&mut sign)?;
-        if &sign != layout::SIGN {
-            anyhow::bail!("not is sftrace log: {:?}", sign);
+        // check sign
+        {
+            let mut sign = [0; layout::SIGN_TRACE.len()];
+            log.read_exact(&mut sign)?;
+            if &sign != layout::SIGN_TRACE {
+                anyhow::bail!("not is sftrace log: {:?}", sign);
+            }
         }
-    }
 
-    let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
-    let pid = metadata.pid.try_into().context("bad pid")?;
+        let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
+        let pid = metadata.pid.try_into().context("bad pid")?;
 
-    let sympath = options.symbol.as_ref().unwrap_or(&metadata.shlib_path);
+        let sympath = self.symbol.as_ref().unwrap_or(&metadata.shlib_path);
 
-    let loader = addr2line::Loader::new(sympath)
-        .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
-    let loader = Addr2Line::new(loader);
+        let loader = addr2line::Loader::new(sympath)
+            .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
+        let loader = Addr2Line::new(loader);
 
-    let output = fs::File::create(&options.output)?;
-    let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
+        let output = fs::File::create(&self.output)?;
+        let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
 
-    let mut state = State {
-        metadata: &metadata,
-        loader: &loader,
-        process_id: pid,
-        stack: HashMap::new()
-    };
-    let mut packet = PacketWriter::default();
-
-    while !log.fill_buf()?.is_empty() {
-        let event: layout::Event = cbor4ii::serde::from_reader(&mut log)?;
-
-        let maybe_addr = match event.kind {
-            layout::Kind::ENTRY => {
-                let addr = event.child_ip - metadata.shlib_base;
-                state.stack.entry(event.tid).or_default().push(addr);
-                Some(addr)
-            },
-            layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
-                let mut is_empty = false;
-
-                let maybe_addr = state.stack.get_mut(&event.tid)
-                    .and_then(|stack| {
-                        let last = stack.pop();
-                        is_empty = stack.is_empty();
-                        last
-                    });
-
-                if maybe_addr.is_none() {
-                    eprintln!("missing entry event: {:?}", event);
-                }
-
-                if is_empty {
-                    state.stack.remove(&event.tid);
-                }
-
-                maybe_addr
-            },
-            _ => None,
+        let mut state = State {
+            metadata: &metadata,
+            loader: &loader,
+            process_id: pid,
+            stack: HashMap::new()
         };
+        let mut packet = PacketWriter::default();
 
-        if let Some(addr) = maybe_addr {
-            packet.push(&mut state, &event, addr);
+        while !log.fill_buf()?.is_empty() {
+            let event: layout::Event<Data, Data> = cbor4ii::serde::from_reader(&mut log)?;
+
+            let maybe_addr = match event.kind {
+                layout::Kind::ENTRY => {
+                    let addr = event.child_ip - metadata.shlib_base;
+                    state.stack.entry(event.tid).or_default().push(addr);
+                    Some(addr)
+                },
+                layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
+                    let mut is_empty = false;
+
+                    let maybe_addr = state.stack.get_mut(&event.tid)
+                        .and_then(|stack| {
+                            let last = stack.pop();
+                            is_empty = stack.is_empty();
+                            last
+                        });
+
+                    if maybe_addr.is_none() {
+                        eprintln!("missing entry event: {:?}", event);
+                    }
+
+                    if is_empty {
+                        state.stack.remove(&event.tid);
+                    }
+
+                    maybe_addr
+                },
+                _ => None,
+            };
+
+            if let Some(addr) = maybe_addr {
+                packet.push(&mut state, &event, addr);
+            }
+
+            if packet.trace.packet.len() > 128 {
+                packet.flush_to(&mut output)?;
+            }
         }
 
-        if packet.trace.packet.len() > 128 {
-            packet.flush_to(&mut output)?;
-        }
+        packet.flush_to(&mut output)?;
+        output.flush()?;
+
+        Ok(())    
     }
-
-    packet.flush_to(&mut output)?;
-    output.flush()?;
-
-    Ok(())    
-}
-
-fn extract(options: &ExtractCommand) -> anyhow::Result<()> {
-    use std::fs;
-    use std::ffi::OsStr;
-    use object::{ Object, ObjectSymbol };
-    use rayon::prelude::*;
-    use zerocopy::IntoBytes;
-
-    let objfd = fs::File::open(&options.path)?;
-    let objbuf = unsafe { memmap2::Mmap::map(&objfd)? };
-    let obj = object::File::parse(&*objbuf)?;
-
-    if let Some(rlibs) = options.rlibs.as_ref() {
-        let obj = &obj;
-        
-        let mut map = glob::glob(rlibs)?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.extension() == Some(OsStr::new("rlib")))
-            .par_bridge()
-            .filter_map(|entry| {
-                eprintln!("load {:?}", entry);
-
-                fs::File::open(&entry).ok()
-            })
-            .map(|fd| {
-                let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
-                let rlib = object::read::archive::ArchiveFile::parse(&*buf).unwrap();
-                let syms = rlib.symbols().unwrap();
-
-                syms.into_iter()
-                    .flatten()
-                    .filter_map(Result::ok)
-                    .par_bridge()
-                    .filter_map(|sym| {
-                        obj.symbol_by_name_bytes(sym.name())
-                            .filter(|sym| matches!(sym.kind(), object::SymbolKind::Text))
-                            .filter(|sym| sym.is_definition())
-                            .map(|sym| sym.address())
-                    })
-                    .collect::<Vec<u64>>()
-            })
-            .reduce(Vec::new, |mut sum, mut next| {
-                sum.append(&mut next);
-                sum
-            });
-        map.par_sort();
-        map.dedup();
-
-        println!("done {:?}", map.len());
-
-        let mut output = fs::File::create(&options.output)?;
-        let hash = obj.build_id()
-            .ok()
-            .flatten()
-            .map(layout::FilterMap::build_id_hash)
-            .unwrap_or_default();
-        output.write_all(&hash.to_ne_bytes())?;
-        output.write_all(map.as_bytes())?;
-    }
-
-    Ok(())   
 }
 
 struct State<'g> {
@@ -262,6 +167,11 @@ impl Addr2Line {
                                 .map(|name| name.into_owned())
                                 .ok()
                             )
+                            .or_else(|| self.loader
+                                .find_symbol(addr)
+                                .map(|name| name.to_owned())
+                                .map(|name| addr2line::demangle_auto(name.into(), None).into_owned())
+                            )
                             .unwrap_or_else(|| "unknown".into()),
                         file: frame.location
                             .as_ref()
@@ -295,7 +205,7 @@ impl PacketWriter {
         pid as u64        
     }
     
-    fn thread_uuid(&mut self, global_state: &State, event: &layout::Event) -> u64 {
+    fn thread_uuid(&mut self, global_state: &State, event: &layout::Event<Data, Data>) -> u64 {
         let pid = self.process_uuid(global_state);
         let tid = event.tid;
         
@@ -368,7 +278,7 @@ impl PacketWriter {
         }
     }
     
-    fn push(&mut self, state: &mut State, event: &layout::Event, addr: u64) {
+    fn push(&mut self, state: &mut State, event: &layout::Event<Data, Data>, addr: u64) {
         let thread_uuid = self.thread_uuid(state, event);
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();

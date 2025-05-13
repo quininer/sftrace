@@ -8,6 +8,7 @@ crate-type = [ "cdylib" ]
 
 [[bin]]
 name = "sftrace"
+path = "src/tools/bin.rs"
 
 [workspace]
 members = [ "setup" ]
@@ -17,21 +18,18 @@ members = [ "setup" ]
 anyhow = "1"
 argh = "0.1"
 addr2line = "0.24"
+toml = "0.8"
 flate2 = "1"
 prost = "0.13"
 micromegas-perfetto = "0.7"
 rayon = "1"
 siphasher = "1"
 
-# perf
-quanta = "0.12"
-
 # xray patch
 libc = "0.2"
 findshlibs = "0.10"
 object = "0.36"
 memmap2 = "0.9"
-regex = { version = "1", default-features = false, features = [ "perf", "std" ] }
 glob = "0.3"
 
 # events
