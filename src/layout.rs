@@ -16,7 +16,7 @@ pub struct Metadata {
 
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
-pub struct Event<ARGS, RV> {
+pub struct Event<ARGS, RV, ALLOC> {
     #[serde(rename = "k")]
     pub kind: Kind,
     #[serde(rename = "T")]
@@ -24,13 +24,33 @@ pub struct Event<ARGS, RV> {
     #[serde(rename = "t")]
     pub tid: i32,
     #[serde(rename = "c")]
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(skip_serializing_if = "u64_is_zero")]
     #[serde(default)]
     pub child_ip: u64,
     #[serde(rename = "a")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<ARGS>,
     #[serde(rename = "r")]
-    pub return_value: Option<RV>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_value: Option<RV>,
+    #[serde(rename = "A")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alloc_event: Option<ALLOC>
+}
+
+#[derive(Serialize, Deserialize)]
+#[derive(Debug)]
+pub struct AllocEvent {
+    #[serde(rename = "os")]
+    pub old_size: u64,
+    #[serde(rename = "ns")]
+    pub new_size: u64,
+    #[serde(rename = "a")]
+    pub align: u64,
+    #[serde(rename = "op")]
+    pub old_ptr: u64,
+    #[serde(rename = "np")]
+    pub new_ptr: u64    
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,9 +62,12 @@ impl Kind {
     pub const ENTRY: Kind = Kind(1);
     pub const EXIT: Kind = Kind(2);
     pub const TAIL_CALL: Kind = Kind(3);
+    pub const ALLOC: Kind = Kind(4);
+    pub const DEALLOC: Kind = Kind(5);
+    pub const REALLOC: Kind = Kind(6);
 }
 
-fn is_zero(n: &u64) -> bool {
+fn u64_is_zero(n: &u64) -> bool {
     *n == 0
 }
 

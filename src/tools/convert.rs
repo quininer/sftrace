@@ -7,7 +7,10 @@ use argh::FromArgs;
 use anyhow::Context;
 use serde::Deserialize;
 use prost::Message;
-use micromegas_perfetto::protos::{ Trace, TracePacket, EventName, SourceLocation, trace_packet, track_event };
+use micromegas_perfetto::protos::{
+    Trace, TracePacket, EventName, SourceLocation, DebugAnnotation,
+    trace_packet, track_event, debug_annotation
+};
 use crate::layout;
 use crate::util::VecMap;
 
@@ -23,9 +26,13 @@ pub struct SubCommand {
     #[argh(option, short = 's')]
     symbol: Option<PathBuf>,
 
+    /// filter config
+    #[argh(option, short = 'c')]
+    config: Option<PathBuf>,
+
     /// chrome-trace output path
     #[argh(option, short = 'o')]
-    output: PathBuf,    
+    output: PathBuf,
 }
 
 #[derive(Deserialize, Debug)]
@@ -67,13 +74,14 @@ impl SubCommand {
         let mut packet = PacketWriter::default();
 
         while !log.fill_buf()?.is_empty() {
-            let event: layout::Event<Data, Data> = cbor4ii::serde::from_reader(&mut log)?;
+            let event: layout::Event<Data, Data, layout::AllocEvent> =
+                cbor4ii::serde::from_reader(&mut log)?;
 
-            let maybe_addr = match event.kind {
+            match event.kind {
                 layout::Kind::ENTRY => {
                     let addr = event.child_ip - metadata.shlib_base;
                     state.stack.entry(event.tid).or_default().push(addr);
-                    Some(addr)
+                    packet.push_call(&mut state, &event, addr);
                 },
                 layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                     let mut is_empty = false;
@@ -93,14 +101,16 @@ impl SubCommand {
                         state.stack.remove(&event.tid);
                     }
 
-                    maybe_addr
+                    if let Some(addr) = maybe_addr {
+                        packet.push_call(&mut state, &event, addr);
+                    }
                 },
-                _ => None,
+                // temp ignore
+                layout::Kind::ALLOC
+                | layout::Kind::DEALLOC
+                | layout::Kind::REALLOC => (),
+                _ => (),
             };
-
-            if let Some(addr) = maybe_addr {
-                packet.push(&mut state, &event, addr);
-            }
 
             if packet.trace.packet.len() > 128 {
                 packet.flush_to(&mut output)?;
@@ -205,7 +215,11 @@ impl PacketWriter {
         pid as u64        
     }
     
-    fn thread_uuid(&mut self, global_state: &State, event: &layout::Event<Data, Data>) -> u64 {
+    fn thread_uuid(
+        &mut self,
+        global_state: &State,
+        event: &layout::Event<Data, Data, layout::AllocEvent>
+    ) -> u64 {
         let pid = self.process_uuid(global_state);
         let tid = event.tid;
         
@@ -278,7 +292,12 @@ impl PacketWriter {
         }
     }
     
-    fn push(&mut self, state: &mut State, event: &layout::Event<Data, Data>, addr: u64) {
+    fn push_call(
+        &mut self,
+        state: &mut State,
+        event: &layout::Event<Data, Data, layout::AllocEvent>,
+        addr: u64
+    ) {
         let thread_uuid = self.thread_uuid(state, event);
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();
@@ -292,19 +311,82 @@ impl PacketWriter {
                 let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
                 track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
+                track_event.debug_annotations = event.args.as_ref()
+                    .map(|data| to_debug_anno("args", data))
+                    .into_iter()
+                    .collect();
             },
             layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                 track_event.r#type = Some(track_event::Type::SliceEnd.into());
                 let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
                 track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
+                track_event.debug_annotations = event.return_value.as_ref()
+                    .map(|data| to_debug_anno("return_value", data))
+                    .into_iter()
+                    .collect();
             },
-            _ => ()
+            _ => unreachable!()
         }
 
         packet.data = Some(trace_packet::Data::TrackEvent(track_event));
         self.trace.packet.push(packet);
     }
+
+    // fn push_alloc_event(
+    //     &mut self,
+    //     state: &mut State,
+    //     event: &layout::Event<Data, Data, layout::AllocEvent>
+    // ) {
+    //     use micromegas_perfetto::protos::{ StreamingAllocation, StreamingFree };
+
+    //     let Some(alloc_event) = event.alloc_event.as_ref()
+    //         else {
+    //             println!("miss alloc event data");
+    //             return
+    //         };
+        
+    //     let thread_uuid = self.thread_uuid(state, event);
+
+    //     let mut packet = micromegas_perfetto::writer::new_trace_packet();
+    //     let mut track_event = micromegas_perfetto::writer::new_track_event();
+    //     packet.timestamp = Some(event.time);
+    //     track_event.track_uuid = Some(thread_uuid);
+    //     track_event.r#type = Some(track_event::Type::Instant.into());
+
+    //     dbg!(&alloc_event);
+
+    //     match event.kind {
+    //         layout::Kind::ALLOC => {
+    //             let mut data = StreamingAllocation::default();
+    //             data.address = vec![alloc_event.new_ptr];
+    //             data.size = vec![alloc_event.new_size];
+    //             packet.data = Some(trace_packet::Data::StreamingAllocation(data));
+    //             self.trace.packet.push(packet);
+    //         },
+    //         layout::Kind::DEALLOC => {
+    //             let mut data = StreamingFree::default();
+    //             data.address = vec![alloc_event.old_ptr];
+    //             packet.data = Some(trace_packet::Data::StreamingFree(data));
+    //             self.trace.packet.push(packet);
+    //         },
+    //         layout::Kind::REALLOC => {
+    //             let mut data = StreamingFree::default();
+    //             data.address = vec![alloc_event.old_ptr];
+    //             packet.data = Some(trace_packet::Data::StreamingFree(data));
+    //             self.trace.packet.push(packet.clone());
+
+    //             {
+    //                 let mut data = StreamingAllocation::default();
+    //                 data.address = vec![alloc_event.new_ptr];
+    //                 data.size = vec![alloc_event.new_size];
+    //                 packet.data = Some(trace_packet::Data::StreamingAllocation(data));
+    //                 self.trace.packet.push(packet);
+    //             }
+    //         },
+    //         _ => unreachable!()
+    //     }
+    // }
 
     fn flush_to<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         if self.trace.packet.is_empty() {
@@ -320,4 +402,39 @@ impl PacketWriter {
         self.source_locations.clear();
         Ok(())
     }
+}
+
+fn to_debug_anno(name: &str, data: &Data) -> DebugAnnotation {
+    let mut anno = DebugAnnotation::default();
+    anno.name_field = Some(debug_annotation::NameField::Name(name.into()));
+    anno.dict_entries = data.0.vec.iter()
+        .map(|(k, v)| {
+            let v = *v;
+            let mut anno = DebugAnnotation::default();
+            anno.name_field = Some(debug_annotation::NameField::Name(k.into()));
+
+            match v.try_into() {
+                Ok(v) => anno.value = Some(debug_annotation::Value::UintValue(v)),
+                Err(_) => {
+                    let x = v as u64;
+                    let y = (v >> 64) as u64;
+
+                    let x = {
+                        let mut anno = DebugAnnotation::default();
+                        anno.value = Some(debug_annotation::Value::UintValue(x));
+                        anno
+                    };
+                    let y = {
+                        let mut anno = DebugAnnotation::default();
+                        anno.value = Some(debug_annotation::Value::UintValue(y));
+                        anno
+                    };
+                    anno.array_values = vec![x, y];
+                },
+            }
+
+            anno            
+        })
+        .collect();
+    anno
 }

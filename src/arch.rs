@@ -2,37 +2,59 @@
 
 use serde::Serialize;
 use crate::events;
+use crate::util::{ u64_is_zero, u128_is_zero };
 
 #[derive(Serialize)]
 #[repr(C)]
 pub struct Args {
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub r11: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub r10: u64,
     
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub r9: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub r8: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rcx: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rsi: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rdx: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rax: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rdi: u64,
 
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm7: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm6: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm5: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm4: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm3: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm2: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm1: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm0: u128,
 }
 
 #[derive(Serialize)]
 #[repr(C)]
 pub struct ReturnValue {
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rax: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
     pub rdx: u64,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm0: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm1: u128
 }
 
@@ -90,8 +112,8 @@ macro_rules! helper {
     (save return) => {
         concat!(
             // save original return values
-            "movdqu xmmword ptr [rsp+0x20], xmm0\n",
-            "movdqu xmmword ptr [rsp+0x10], xmm1\n",
+            "movdqu xmmword ptr [rsp+0x20], xmm1\n",
+            "movdqu xmmword ptr [rsp+0x10], xmm0\n",
             "mov      qword ptr [rsp+0x08],  rdx\n",
             "mov      qword ptr [rsp     ],  rax\n",
         )

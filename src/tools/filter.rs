@@ -33,9 +33,11 @@ pub struct SubCommand {
 
 impl SubCommand {
     pub fn exec(&self) -> anyhow::Result<()> {
-        let config: config::Config = if let Some(path) = self.config.as_ref() {
+        let config = if let Some(path) = self.config.as_ref() {
             let buf = fs::read_to_string(path)?;
-            toml::from_str(&buf)?
+            let mut config: config::Config = toml::from_str(&buf)?;
+            config.make();
+            config
         } else {
             Default::default()
         };
@@ -46,8 +48,6 @@ impl SubCommand {
         let objfd = fs::File::open(objpath)?;
         let objbuf = unsafe { memmap2::Mmap::map(&objfd)? };
         let obj = object::File::parse(&*objbuf)?;
-
-        let allocator_point = config.allocator();
 
         if let Some(rlibs) = config.rlibs().or(self.rlibs.as_deref()) {
             let obj = &obj;
@@ -76,9 +76,8 @@ impl SubCommand {
                                 .filter(|sym| sym.is_definition())
                         })
                         .map(|sym| {
-                            let hint = allocator_point.zip(sym.name_bytes().ok())
-                                .filter(|(point, name)| point.contains(name))
-                                .is_some();
+                            let name = sym.name_bytes().unwrap();
+                            let hint = config.record_args().binary_search_by_key(&name, |s| s.as_bytes()).is_ok();
                             layout::FilterMark::new(sym.address(), hint).expect("big address")
                         })
                         .collect::<Vec<_>>()
@@ -106,14 +105,15 @@ impl SubCommand {
             let map = obj.symbols()
                 .filter(|sym| matches!(sym.kind(), object::SymbolKind::Text))
                 .filter(|sym| sym.is_definition())
-                .filter(|sym| {
-                    allocator_point
-                        .map(|point| sym.name_bytes().ok()
-                            .filter(|name| point.contains(name))
-                            .is_some()
-                        )
-                        .unwrap_or(true)
-                })
+                .filter(|sym| sym.name_bytes()
+                    .ok()
+                    .filter(|name| config
+                        .record_args()
+                        .binary_search_by_key(name, |s| s.as_bytes())
+                        .is_ok()
+                    )
+                    .is_some()
+                )
                 .map(|sym| layout::FilterMark::new(sym.address(), true).expect("big address"))
                 .collect::<Vec<_>>();
 

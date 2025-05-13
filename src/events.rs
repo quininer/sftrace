@@ -42,17 +42,18 @@ impl Local {
         child_ip: *const u8,
         args: Option<&Args>,
         return_value: Option<&ReturnValue>,
+        alloc_event: Option<&AllocEvent>,
     ) {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
         const CAP: usize = 4 * 1024;
         
-        let event: Event<&Args, &ReturnValue> = Event {
+        let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
             kind,
             child_ip: (child_ip as u64),
             time: dur2u64(NOW.elapsed()),
             tid: (*self.tid.get_or_insert_with(thread_id)),
-            args, return_value
+            args, return_value, alloc_event
         };
         cbor4ii::serde::to_writer(&mut self.line, &event).unwrap();
 
@@ -93,30 +94,58 @@ pub fn flush_current_thread() {
 
 pub extern "C" fn record_entry(child: *const u8) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, child, None, None);
+        local.record(Kind::ENTRY, child, None, None, None);
     });
 }
 
 pub extern "C" fn record_exit() {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null(), None, None);
+        local.record(Kind::EXIT, ptr::null(), None, None, None);
     });    
 }
 
 pub extern "C" fn record_tailcall() {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::TAIL_CALL, ptr::null(), None, None);
+        local.record(Kind::TAIL_CALL, ptr::null(), None, None, None);
     });    
 }
 
 pub extern "C" fn record_entry_log(child: *const u8, args: &Args) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, child, Some(args), None);
+        local.record(Kind::ENTRY, child, Some(args), None, None);
     });
 }
 
 pub extern "C" fn record_exit_log(return_value: &ReturnValue) {
     LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null(), None, Some(return_value));
+        local.record(Kind::EXIT, ptr::null(), None, Some(return_value), None);
     });    
+}
+
+pub fn record_alloc(
+    kind: u8,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+    old_ptr: *mut u8,
+    new_ptr: *mut u8
+) {
+    LOCAL.with_borrow_mut(|local| {
+        let kind = match kind {
+            1 => Kind::ALLOC,
+            2 => Kind::DEALLOC,
+            3 => Kind::REALLOC,
+            _ => panic!()
+        };
+        
+        let event = AllocEvent {
+            old_size: old_size as u64,
+            new_size: new_size as u64,
+            align: align as u64,
+            old_ptr: old_ptr as usize as u64,
+            new_ptr: new_ptr as usize as u64
+        };
+        
+        local.record(kind, ptr::null(), None, None, Some(&event));
+    });
 }

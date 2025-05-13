@@ -12,18 +12,17 @@ pub struct Config {
 pub struct Object {
     pub path: Option<PathBuf>,
     pub rlibs: Option<String>,
-    pub allocator: Option<Allocator>,
-}
-
-#[derive(Deserialize)]
-pub struct Allocator {
-    pub alloc: String,
-    pub dealloc: String,
-    pub alloc_zeroed: String,
-    pub realloc: String,
+    #[serde(default)]
+    pub record_args: Vec<String>,
 }
 
 impl Config {
+    pub fn make(&mut self) {
+        if let Some(obj) = self.object.as_mut() {
+            obj.record_args.sort();
+        }
+    }
+    
     pub fn path(&self) -> Option<&Path> {
         let obj = self.object.as_ref()?;
         obj.path.as_deref()
@@ -34,20 +33,9 @@ impl Config {
         obj.rlibs.as_deref()
     }
 
-    pub fn allocator(&self) -> Option<&Allocator> {
-        let obj = self.object.as_ref()?;
-        obj.allocator.as_ref()        
-    }
-}
-
-
-impl Allocator {
-    pub fn contains(&self, name: &[u8]) -> bool {
-        [
-            self.alloc.as_bytes(),
-            self.dealloc.as_bytes(),
-            self.alloc_zeroed.as_bytes(),
-            self.realloc.as_bytes()
-        ].contains(&name)
+    pub fn record_args(&self) -> &[String] {
+        self.object.as_ref()
+            .map(|obj| obj.record_args.as_slice())
+            .unwrap_or_default()
     }
 }

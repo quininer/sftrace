@@ -33,6 +33,18 @@ pub extern "C" fn sftrace_setup(
     ));
 }
 
+#[no_mangle]
+pub extern "C" fn sftrace_alloc_event(
+    kind: u8,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+    old_ptr: *mut u8,
+    new_ptr: *mut u8    
+) {
+    events::record_alloc(kind, old_size, new_size, align, old_ptr, new_ptr);
+}
+
 static OUTPUT: OnceLock<fs::File> = OnceLock::new();
 
 fn init(

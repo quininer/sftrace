@@ -17,3 +17,11 @@ impl<T, F: Fn(&mut T)> Drop for ScopeGuard<T, F> {
         (self.1)(&mut self.0);
     }
 }
+
+pub fn u64_is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+pub fn u128_is_zero(n: &u128) -> bool {
+    *n == 0
+}
