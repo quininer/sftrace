@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use crate::util::thread_id;
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
+use crate::OUTPUT;
 
 
 struct Local {
@@ -47,6 +48,11 @@ impl Local {
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
         const CAP: usize = 4 * 1024;
+
+        // Uninitialized, ignored
+        if OUTPUT.get().is_none() {
+           return; 
+        }
         
         let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
             kind,
@@ -74,13 +80,11 @@ impl Local {
     }
 
     pub fn flush(&mut self) {
-        use crate::OUTPUT;
-
-        let mut output = OUTPUT.get().unwrap();
-
-        // We assume that writes are atomic (<= 4k)
-        output.write_all(&self.buf).unwrap();
-        self.buf.clear();
+        if let Some(mut output) = OUTPUT.get() {
+            // We assume that writes are atomic (<= 4k)
+            output.write_all(&self.buf).unwrap();
+            self.buf.clear();
+        }
     }
 }
 
@@ -93,32 +97,42 @@ pub fn flush_current_thread() {
 }
 
 pub extern "C" fn record_entry(child: *const u8) {
-    LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, child, None, None, None);
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.record(Kind::ENTRY, child, None, None, None);
+        }
     });
 }
 
 pub extern "C" fn record_exit() {
-    LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null(), None, None, None);
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.record(Kind::EXIT, ptr::null(), None, None, None);
+        }
     });    
 }
 
 pub extern "C" fn record_tailcall() {
-    LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::TAIL_CALL, ptr::null(), None, None, None);
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.record(Kind::TAIL_CALL, ptr::null(), None, None, None);
+        }
     });    
 }
 
 pub extern "C" fn record_entry_log(child: *const u8, args: &Args) {
-    LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::ENTRY, child, Some(args), None, None);
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.record(Kind::ENTRY, child, Some(args), None, None);
+        }
     });
 }
 
 pub extern "C" fn record_exit_log(return_value: &ReturnValue) {
-    LOCAL.with_borrow_mut(|local| {
-        local.record(Kind::EXIT, ptr::null(), None, Some(return_value), None);
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            local.record(Kind::EXIT, ptr::null(), None, Some(return_value), None);
+        }
     });    
 }
 
@@ -130,22 +144,24 @@ pub fn record_alloc(
     old_ptr: *mut u8,
     new_ptr: *mut u8
 ) {
-    LOCAL.with_borrow_mut(|local| {
-        let kind = match kind {
-            1 => Kind::ALLOC,
-            2 => Kind::DEALLOC,
-            3 => Kind::REALLOC,
-            _ => panic!()
-        };
+    let _ = LOCAL.try_with(|local| {
+        if let Ok(mut local) = local.try_borrow_mut() {
+            let kind = match kind {
+                1 => Kind::ALLOC,
+                2 => Kind::DEALLOC,
+                3 => Kind::REALLOC,
+                _ => panic!()
+            };
         
-        let event = AllocEvent {
-            old_size: old_size as u64,
-            new_size: new_size as u64,
-            align: align as u64,
-            old_ptr: old_ptr as usize as u64,
-            new_ptr: new_ptr as usize as u64
-        };
+            let event = AllocEvent {
+                old_size: old_size as u64,
+                new_size: new_size as u64,
+                align: align as u64,
+                old_ptr: old_ptr as usize as u64,
+                new_ptr: new_ptr as usize as u64
+            };
         
-        local.record(kind, ptr::null(), None, None, Some(&event));
+            local.record(kind, ptr::null(), None, None, Some(&event));
+        }
     });
 }
