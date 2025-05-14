@@ -137,8 +137,8 @@ macro_rules! build {
 
                 helper!(save args),
 
-                // child ip
-                "mov rdi, qword ptr [rsp+0xc8]",
+                // func id
+                "mov rdi, r10",
 
                 // args
                 "mov rsi, rsp",
@@ -172,14 +172,17 @@ macro_rules! build {
 
                 helper!(save return),
 
+                // func id
+                "mov rdi, r10",
+
                 // return value
-                "mov rdi, rsp",
+                "mov rsi, rsp",
 
                 // align sp to 8B
                 "and rsp, 0xfffffffffffffff8",
 
                 // save original sp and push to 16B
-                "push rdi",
+                "push rsi",
 
                 "call {0}",
 
@@ -197,7 +200,5 @@ macro_rules! build {
 }
 
 build!(entry: xray_entry     -> events::record_entry);
-build!(entry: xray_entry_log -> events::record_entry_log);
-build!(entry: xray_tailcall  -> events::record_tailcall);
 build!(exit : xray_exit      -> events::record_exit);
-build!(exit : xray_exit_log  -> events::record_exit_log);
+build!(entry: xray_tailcall  -> events::record_tailcall);

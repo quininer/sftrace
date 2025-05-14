@@ -3,9 +3,7 @@ use std::alloc::GlobalAlloc;
 unsafe extern "C" {
     fn sftrace_setup(
         entry_slot: unsafe extern "C" fn(),
-        entry_log_slot: unsafe extern "C" fn(),
         exit_slot: unsafe extern "C" fn(),
-        exit_log_slot: unsafe extern "C" fn(),
         tailcall_slot: unsafe extern "C" fn(),        
     );
 

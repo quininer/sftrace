@@ -5,14 +5,15 @@ use std::cell::RefCell;
 use std::collections::{ hash_map, HashMap, HashSet };
 use argh::FromArgs;
 use anyhow::Context;
-use serde::Deserialize;
+use zerocopy::FromBytes;
+use object::{ Object, ObjectSection };
 use prost::Message;
 use micromegas_perfetto::protos::{
     Trace, TracePacket, EventName, SourceLocation, DebugAnnotation,
     trace_packet, track_event, debug_annotation
 };
 use crate::layout;
-use crate::util::VecMap;
+use crate::util::ArgsData;
 
 /// Convert command
 #[derive(FromArgs, PartialEq, Debug)]
@@ -35,10 +36,6 @@ pub struct SubCommand {
     output: PathBuf,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(transparent)] 
-pub struct Data(VecMap<String, u128>);
-
 impl SubCommand {
     pub fn exec(&self) -> anyhow::Result<()> {
         let log = fs::File::open(&self.path)?;
@@ -57,6 +54,23 @@ impl SubCommand {
         let pid = metadata.pid.try_into().context("bad pid")?;
 
         let sympath = self.symbol.as_ref().unwrap_or(&metadata.shlib_path);
+        let symfd = fs::File::open(&sympath)?;
+        let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
+        let symobj = object::File::parse(&*symbuf)?;
+        let xray_section = symobj.section_by_name("xray_instr_map")
+            .context("not found xray_instr_map section")?;
+        let xray_buf = xray_section.uncompressed_data()?;
+
+        let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(xray_buf.as_ref())
+            .map_err(|_| anyhow::format_err!("xray_instr_map parse failed"))?;
+        let section_offset: usize = xray_section.address().try_into()?;
+        let entry_map = layout::XRayInstrMap(entry_map);
+
+        if let Ok(Some(build_id)) = symobj.build_id() {
+            if metadata.shlibid != build_id {
+                anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
+            }
+        }
 
         let loader = addr2line::Loader::new(sympath)
             .map_err(|err| anyhow::format_err!("parse symbol failed: {:?}", err))?;
@@ -69,31 +83,41 @@ impl SubCommand {
             metadata: &metadata,
             loader: &loader,
             process_id: pid,
+            section_offset, entry_map,
             stack: HashMap::new()
         };
         let mut packet = PacketWriter::default();
 
         while !log.fill_buf()?.is_empty() {
-            let event: layout::Event<Data, Data, layout::AllocEvent> =
+            let event: layout::Event<ArgsData, ArgsData, layout::AllocEvent> =
                 cbor4ii::serde::from_reader(&mut log)?;
 
             match event.kind {
                 layout::Kind::ENTRY => {
-                    let addr = event.child_ip - metadata.shlib_base;
-                    state.stack.entry(event.tid).or_default().push(addr);
-                    packet.push_call(&mut state, &event, addr);
+                    let func_id = event.func_id;
+                    state.stack.entry(event.tid).or_default().push(func_id);
+                    packet.push_call(&mut state, &event, func_id);
                 },
                 layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
+                    let mut has_entry = false;
                     let mut is_empty = false;
 
-                    let maybe_addr = state.stack.get_mut(&event.tid)
-                        .and_then(|stack| {
-                            let last = stack.pop();
-                            is_empty = stack.is_empty();
-                            last
-                        });
+                    if let Some(stack) = state.stack.get_mut(&event.tid){
+                        if let Some(entry_func_id) = stack.pop() {
+                            has_entry = true;
 
-                    if maybe_addr.is_none() {
+                            let (_, entry_func, _) = state.entry_map.get(state.section_offset, entry_func_id as usize);
+                            let (_, exit_func, _) = state.entry_map.get(state.section_offset, event.func_id as usize);
+                            
+                            if entry_func != exit_func {
+                                eprintln!("func id does not match: {:?} vs {:?}", entry_func_id, event.func_id);
+                            }
+                        }
+
+                        is_empty = stack.is_empty();
+                    }
+
+                    if !has_entry {
                         eprintln!("missing entry event: {:?}", event);
                     }
 
@@ -101,9 +125,7 @@ impl SubCommand {
                         state.stack.remove(&event.tid);
                     }
 
-                    if let Some(addr) = maybe_addr {
-                        packet.push_call(&mut state, &event, addr);
-                    }
+                    packet.push_call(&mut state, &event, event.func_id);
                 },
                 // temp ignore
                 layout::Kind::ALLOC
@@ -129,7 +151,9 @@ struct State<'g> {
     metadata: &'g layout::Metadata,
     loader: &'g Addr2Line,
     process_id: i32,
-    stack: HashMap<i32, Vec<u64>>,
+    section_offset: usize,
+    entry_map: layout::XRayInstrMap<'g>,
+    stack: HashMap<i32, Vec<u32>>,
 }
 
 struct Addr2Line {
@@ -218,7 +242,7 @@ impl PacketWriter {
     fn thread_uuid(
         &mut self,
         global_state: &State,
-        event: &layout::Event<Data, Data, layout::AllocEvent>
+        event: &layout::Event<ArgsData, ArgsData, layout::AllocEvent>
     ) -> u64 {
         let pid = self.process_uuid(global_state);
         let tid = event.tid;
@@ -295,10 +319,12 @@ impl PacketWriter {
     fn push_call(
         &mut self,
         state: &mut State,
-        event: &layout::Event<Data, Data, layout::AllocEvent>,
-        addr: u64
+        event: &layout::Event<ArgsData, ArgsData, layout::AllocEvent>,
+        func_id: u32
     ) {
         let thread_uuid = self.thread_uuid(state, event);
+        let (_, func_addr, _) = state.entry_map.get(state.section_offset, func_id as usize);
+        let addr = func_addr as u64;
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();
         let mut track_event = micromegas_perfetto::writer::new_track_event();
@@ -404,7 +430,7 @@ impl PacketWriter {
     }
 }
 
-fn to_debug_anno(name: &str, data: &Data) -> DebugAnnotation {
+fn to_debug_anno(name: &str, data: &ArgsData) -> DebugAnnotation {
     let mut anno = DebugAnnotation::default();
     anno.name_field = Some(debug_annotation::NameField::Name(name.into()));
     anno.dict_entries = data.0.vec.iter()

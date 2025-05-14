@@ -17,16 +17,15 @@ pub struct Metadata {
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 pub struct Event<ARGS, RV, ALLOC> {
-    #[serde(rename = "k")]
-    pub kind: Kind,
-    #[serde(rename = "T")]
-    pub time: u64,
     #[serde(rename = "t")]
     pub tid: i32,
-    #[serde(rename = "c")]
-    #[serde(skip_serializing_if = "u64_is_zero")]
-    #[serde(default)]
-    pub child_ip: u64,
+    #[serde(rename = "f")]
+    #[serde(skip_serializing_if = "u32_is_zero")]
+    pub func_id: u32,
+    #[serde(rename = "T")]
+    pub time: u64,
+    #[serde(rename = "k")]
+    pub kind: Kind,
     #[serde(rename = "a")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<ARGS>,
@@ -67,7 +66,7 @@ impl Kind {
     pub const REALLOC: Kind = Kind(6);
 }
 
-fn u64_is_zero(n: &u64) -> bool {
+fn u32_is_zero(n: &u32) -> bool {
     *n == 0
 }
 
@@ -75,6 +74,49 @@ pub fn build_id_hash(build_id: &[u8]) -> u64 {
     use siphasher::sip::SipHasher24;
 
     SipHasher24::new().hash(build_id)
+}
+
+// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4447
+#[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
+#[repr(C)]
+pub struct XRayFunctionEntry {
+    pub address: usize,
+    pub function: usize,
+    pub kind: u8,
+    pub always_instrument: u8,
+    pub version: u8,
+    padding: [u8; (4 * 8) - ((2 * 8) + 3)]
+}
+
+const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
+
+pub struct XRayInstrMap<'a>(pub &'a [XRayFunctionEntry]);
+
+impl XRayInstrMap<'_> {
+    pub fn get(&self, section_offset: usize, idx: usize) -> (usize, usize, &'_ XRayFunctionEntry) {
+        const ENTRY_SIZE: usize = std::mem::size_of::<XRayFunctionEntry>();
+        
+        let entry = &self.0[idx];
+        let entry_offset = section_offset + idx * ENTRY_SIZE;
+
+        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
+        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199                
+        let address = entry_offset + entry.address;
+        let function = entry_offset + entry.function + std::mem::size_of::<usize>();
+
+        (address, function, entry)
+    }
+    
+    #[allow(dead_code)]
+    pub fn iter(&self, section_offset: usize) -> impl Iterator<Item = (usize, usize, usize, &'_ XRayFunctionEntry)> + '_ {
+        self.0.iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.version == 2)
+            .map(move |(idx, _entry)| {
+                let (address, function, entry) = self.get(section_offset, idx);
+                (idx, address, function, entry)
+            })
+    }
 }
 
 #[derive(FromBytes, Immutable, KnownLayout)]

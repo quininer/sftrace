@@ -3,6 +3,10 @@ use std::marker::PhantomData;
 use serde::{ de, Deserialize, Deserializer };
 
 
+#[derive(Deserialize, Debug)]
+#[serde(transparent)] 
+pub struct ArgsData(pub VecMap<String, u128>);
+
 pub struct VecMap<K, V> {
     pub vec: Vec<(K, V)>
 }

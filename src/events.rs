@@ -1,4 +1,3 @@
-use std::ptr;
 use std::io::Write;
 use std::time::Instant;
 use std::cell::RefCell;
@@ -6,7 +5,7 @@ use std::sync::LazyLock;
 use crate::util::thread_id;
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
-use crate::OUTPUT;
+use crate::{ OUTPUT, FuncId };
 
 
 struct Local {
@@ -40,7 +39,7 @@ impl Local {
     pub fn record(
         &mut self,
         kind: Kind,
-        child_ip: *const u8,
+        func_id: u32,
         args: Option<&Args>,
         return_value: Option<&ReturnValue>,
         alloc_event: Option<&AllocEvent>,
@@ -53,13 +52,16 @@ impl Local {
         if OUTPUT.get().is_none() {
            return; 
         }
+
+        let func_id = FuncId(func_id);
+        let (func_id, enable_log) = func_id.unpack();
         
         let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
-            kind,
-            child_ip: (child_ip as u64),
+            kind, func_id, alloc_event,
             time: dur2u64(NOW.elapsed()),
             tid: (*self.tid.get_or_insert_with(thread_id)),
-            args, return_value, alloc_event
+            args: args.filter(|_| enable_log),
+            return_value: return_value.filter(|_| enable_log),
         };
         cbor4ii::serde::to_writer(&mut self.line, &event).unwrap();
 
@@ -96,42 +98,26 @@ pub fn flush_current_thread() {
     });
 }
 
-pub extern "C" fn record_entry(child: *const u8) {
+pub extern "C" fn record_entry(func_id: u32, args: &Args) {
     let _ = LOCAL.try_with(|local| {
         if let Ok(mut local) = local.try_borrow_mut() {
-            local.record(Kind::ENTRY, child, None, None, None);
+            local.record(Kind::ENTRY, func_id, Some(args), None, None);
         }
     });
 }
 
-pub extern "C" fn record_exit() {
+pub extern "C" fn record_exit(func_id: u32, return_value: &ReturnValue) {
     let _ = LOCAL.try_with(|local| {
         if let Ok(mut local) = local.try_borrow_mut() {
-            local.record(Kind::EXIT, ptr::null(), None, None, None);
+            local.record(Kind::EXIT, func_id, None, Some(return_value), None);
         }
     });    
 }
 
-pub extern "C" fn record_tailcall() {
+pub extern "C" fn record_tailcall(func_id: u32) {
     let _ = LOCAL.try_with(|local| {
         if let Ok(mut local) = local.try_borrow_mut() {
-            local.record(Kind::TAIL_CALL, ptr::null(), None, None, None);
-        }
-    });    
-}
-
-pub extern "C" fn record_entry_log(child: *const u8, args: &Args) {
-    let _ = LOCAL.try_with(|local| {
-        if let Ok(mut local) = local.try_borrow_mut() {
-            local.record(Kind::ENTRY, child, Some(args), None, None);
-        }
-    });
-}
-
-pub extern "C" fn record_exit_log(return_value: &ReturnValue) {
-    let _ = LOCAL.try_with(|local| {
-        if let Ok(mut local) = local.try_borrow_mut() {
-            local.record(Kind::EXIT, ptr::null(), None, Some(return_value), None);
+            local.record(Kind::TAIL_CALL, func_id, None, None, None);
         }
     });    
 }
@@ -161,7 +147,7 @@ pub fn record_alloc(
                 new_ptr: new_ptr as usize as u64
             };
         
-            local.record(kind, ptr::null(), None, None, Some(&event));
+            local.record(kind, 0, None, None, Some(&event));
         }
     });
 }

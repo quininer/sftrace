@@ -22,6 +22,10 @@ pub struct SubCommand {
     #[argh(option, short = 'r')]
     rlibs: Option<String>,
 
+    /// filter by regex
+    #[argh(option, short = 'R')]
+    regex: Option<String>,
+
     /// filter config
     #[argh(option, short = 'c')]
     config: Option<PathBuf>,
