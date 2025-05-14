@@ -59,7 +59,7 @@ build_slot! {
 }
 
 #[inline(always)]
-pub fn setup() {
+pub unsafe fn setup() {
     unsafe {
         sftrace_setup(
             sftrace_entry_slot,
