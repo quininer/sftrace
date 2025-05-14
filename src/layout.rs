@@ -107,7 +107,6 @@ impl XRayInstrMap<'_> {
         (address, function, entry)
     }
     
-    #[allow(dead_code)]
     pub fn iter(&self, section_offset: usize) -> impl Iterator<Item = (usize, usize, usize, &'_ XRayFunctionEntry)> + '_ {
         self.0.iter()
             .enumerate()
