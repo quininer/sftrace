@@ -24,6 +24,7 @@ prost = "0.13"
 micromegas-perfetto = "0.7"
 rayon = "1"
 siphasher = "1"
+indexmap = "2"
 
 # xray patch
 libc = "0.2"

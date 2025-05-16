@@ -130,7 +130,8 @@ impl SubCommand {
                 // temp ignore
                 layout::Kind::ALLOC
                 | layout::Kind::DEALLOC
-                | layout::Kind::REALLOC => (),
+                | layout::Kind::REALLOC_ALLOC
+                | layout::Kind::REALLOC_DEALLOC => (),
                 _ => (),
             };
 

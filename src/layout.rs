@@ -40,16 +40,12 @@ pub struct Event<ARGS, RV, ALLOC> {
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 pub struct AllocEvent {
-    #[serde(rename = "os")]
-    pub old_size: u64,
-    #[serde(rename = "ns")]
-    pub new_size: u64,
+    #[serde(rename = "s")]
+    pub size: u64,
     #[serde(rename = "a")]
     pub align: u64,
-    #[serde(rename = "op")]
-    pub old_ptr: u64,
-    #[serde(rename = "np")]
-    pub new_ptr: u64    
+    #[serde(rename = "p")]
+    pub ptr: u64    
 }
 
 #[derive(Serialize, Deserialize)]
@@ -63,7 +59,8 @@ impl Kind {
     pub const TAIL_CALL: Kind = Kind(3);
     pub const ALLOC: Kind = Kind(4);
     pub const DEALLOC: Kind = Kind(5);
-    pub const REALLOC: Kind = Kind(6);
+    pub const REALLOC_ALLOC: Kind = Kind(6);
+    pub const REALLOC_DEALLOC: Kind = Kind(7);
 }
 
 fn u32_is_zero(n: &u32) -> bool {

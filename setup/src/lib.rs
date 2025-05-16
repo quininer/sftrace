@@ -9,11 +9,9 @@ unsafe extern "C" {
 
     fn sftrace_alloc_event(
         kind: u8,
-        old_size: usize,
-        new_size: usize,
+        size: usize,
         align: usize,
-        old_ptr: *mut u8,
-        new_ptr: *mut u8    
+        ptr: *mut u8    
     );    
 }
 
@@ -50,9 +48,7 @@ macro_rules! build_slot {
 
 build_slot! {
     sftrace_entry_slot;
-    sftrace_entry_log_slot;
     sftrace_exit_slot;
-    sftrace_exit_log_slot;
     sftrace_tailcall_slot;
 }
 
@@ -61,9 +57,7 @@ pub unsafe fn setup() {
     unsafe {
         sftrace_setup(
             sftrace_entry_slot,
-            sftrace_entry_log_slot,
             sftrace_exit_slot,
-            sftrace_exit_log_slot,
             sftrace_tailcall_slot
         );
     }
@@ -76,7 +70,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         unsafe {
             let v = std::alloc::System.alloc(layout);
-            sftrace_alloc_event(1, 0, layout.size(), layout.align(), std::ptr::null_mut(), v);
+            sftrace_alloc_event(1, layout.size(), layout.align(), v);
             v
         }
     }
@@ -84,7 +78,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         unsafe {
-            sftrace_alloc_event(2, layout.size(), 0, layout.align(), ptr, std::ptr::null_mut());
+            sftrace_alloc_event(2, layout.size(), layout.align(), ptr);
             std::alloc::System.dealloc(ptr, layout);           
         }
     }
@@ -93,7 +87,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
     unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
         unsafe {
             let v = std::alloc::System.alloc_zeroed(layout);
-            sftrace_alloc_event(1, 0, layout.size(), layout.align(), std::ptr::null_mut(), v);
+            sftrace_alloc_event(1, layout.size(), layout.align(), v);
             v
         }
     }
@@ -101,8 +95,9 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
     #[inline]
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
         unsafe {
+            sftrace_alloc_event(4, layout.size(), layout.align(), ptr);
             let v = std::alloc::System.realloc(ptr, layout, new_size);
-            sftrace_alloc_event(3, layout.size(), new_size, layout.align(), ptr, v);
+            sftrace_alloc_event(3, new_size, layout.align(), v);
             v            
         }
     }

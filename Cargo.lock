@@ -443,6 +443,7 @@ dependencies = [
  "findshlibs",
  "flate2",
  "glob",
+ "indexmap",
  "libc",
  "memmap2",
  "micromegas-perfetto",

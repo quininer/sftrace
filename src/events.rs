@@ -124,27 +124,24 @@ pub extern "C" fn record_tailcall(func_id: u32) {
 
 pub fn record_alloc(
     kind: u8,
-    old_size: usize,
-    new_size: usize,
+    size: usize,
     align: usize,
-    old_ptr: *mut u8,
-    new_ptr: *mut u8
+    ptr: *mut u8
 ) {
     let _ = LOCAL.try_with(|local| {
         if let Ok(mut local) = local.try_borrow_mut() {
             let kind = match kind {
                 1 => Kind::ALLOC,
                 2 => Kind::DEALLOC,
-                3 => Kind::REALLOC,
+                3 => Kind::REALLOC_ALLOC,
+                4 => Kind::REALLOC_DEALLOC,
                 _ => panic!()
             };
         
             let event = AllocEvent {
-                old_size: old_size as u64,
-                new_size: new_size as u64,
+                size: size as u64,
                 align: align as u64,
-                old_ptr: old_ptr as usize as u64,
-                new_ptr: new_ptr as usize as u64
+                ptr: ptr as usize as u64
             };
         
             local.record(kind, 0, None, None, Some(&event));
