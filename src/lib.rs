@@ -272,6 +272,7 @@ unsafe fn patch_tailcall(address: usize, func_id: u32, slot: unsafe extern "C" f
 }
 
 extern "C" fn shutdown() {
+    // TODO flush all thread ?
     events::flush_current_thread();
 }
 

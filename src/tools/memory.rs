@@ -125,12 +125,19 @@ impl SubCommand {
                     let event_id: usize = iter.next()
                         .context("need event id")?
                         .parse()?;
+                    let show_stack = iter.next() == Some("--stack");
 
                     let list = memory_analyzer.track(event_id);
                     for id in list {
                         let ev = &memory_analyzer.alloc_event[id];
                         let kind = kind_to_str(ev.kind);
-                        println!("{} {}\t\ttid:{}\tsize:{}", id, kind, ev.tid, ev.size);
+                        let last_stack = ev.stackrange.clone().last()
+                            .filter(|_| show_stack)
+                            .map(|stackid| memory_analyzer.stacklist[stackid])
+                            .map(|func_id| symbol_table.entry_map.get(symbol_table.section_offset, func_id as usize))
+                            .and_then(|(_, addr, _)| symbol_table.symbol_map.get(addr as u64))
+                            .map(|name| addr2line::demangle_auto(name.name().into(), None));
+                        println!("{} {}\ttid:{}\tsize:{}\t{:?}", id, kind, ev.tid, ev.size, &last_stack);
                     }
                     Ok(())
                 },
@@ -279,6 +286,7 @@ impl MemoryAnalyzer {
             }
         }
 
+        let last_stage = milestones.len().saturating_sub(1);
         let mut list = milestones
             .into_iter()
             .enumerate()
@@ -292,8 +300,10 @@ impl MemoryAnalyzer {
 
                     match ev.kind {
                         layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => {
-                            if let Some(oldidx) = ptrmap.insert(ev.ptr, idx) {
-                                eprintln!(
+                            if let Some(oldidx) = ptrmap.insert(ev.ptr, idx)
+                                .filter(|_| stage != last_stage)
+                            {
+                                println!(
                                     "[split/{}] bad alloc: ({}, {}) {:p}",
                                     stage, oldidx, idx, ev.ptr as *const u8
                                 );
@@ -329,6 +339,7 @@ impl MemoryAnalyzer {
         let mut ptrmap = IndexMap::new();
         let mut heaplist: Vec<Vec<u64>> = Vec::with_capacity(result.list.len());
         let mut heap_count = 0;
+        let last_stage = result.list.len().saturating_sub(1);
 
         for (stage_idx, stage) in result.list.iter().enumerate() {
             let mut current = Vec::with_capacity(stage.len());
@@ -338,8 +349,10 @@ impl MemoryAnalyzer {
 
                 match ev.kind {
                     layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => {
-                        if let Some(oldidx) = ptrmap.insert(ev.ptr, idx) {
-                            eprintln!(
+                        if let Some(oldidx) = ptrmap.insert(ev.ptr, idx)
+                            .filter(|_| stage_idx != last_stage)
+                        {
+                            println!(
                                 "[analyze/{}] bad alloc: ({}, {}) {:p}",
                                 stage_idx, oldidx, idx, ev.ptr as *const u8
                             );
@@ -348,8 +361,10 @@ impl MemoryAnalyzer {
                         heap_count += ev.size;
                     },
                     layout::Kind::DEALLOC | layout::Kind::REALLOC_DEALLOC => {
-                        if ptrmap.swap_remove(&ev.ptr).is_none() {
-                            eprintln!(
+                        if ptrmap.swap_remove(&ev.ptr).is_none()
+                            && stage_idx != last_stage
+                        {
+                            println!(
                                 "[analyze/{}] bad free: {} {:p}",
                                 stage_idx, idx, ev.ptr as *const u8
                             );
