@@ -1,7 +1,7 @@
 use std::fs;
 use std::ops::Range;
 use std::io::{ self, BufRead, Read, Write };
-use std::path::PathBuf;
+use std::path::{ Path, PathBuf };
 use std::collections::HashMap;
 use std::time::Duration;
 use argh::FromArgs;
@@ -40,9 +40,13 @@ pub struct SubCommand {
     #[argh(option)]
     plot: Option<PathBuf>,
 
-    /// fold stage
+    /// fold stage (plot)
     #[argh(switch)]
-    fold: bool
+    fold: bool,
+
+    /// select stage (flamegraph)
+    #[argh(option)]
+    select: Option<usize>
 }
 
 macro_rules! try_ {
@@ -107,85 +111,36 @@ impl SubCommand {
         drop(log);
 
         let stage_result = memory_analyzer.split_and_cut();
-        let analyze_result = memory_analyzer.analyze(&stage_result);
-        let symbol_map = symobj.symbol_map();
+        let analyze_result = memory_analyzer.analyze(self, &stage_result)?;
+
+        let symbol_table = SymbolTable {
+            section_offset, entry_map,
+            symbol_map: symobj.symbol_map()
+        };
+        
 
         if let Some(path) = self.flamegraph.as_ref() {
-            let writer = fs::File::create(path)?;
-            let mut writer = io::BufWriter::new(writer);
-
-            let mut line = String::new();
-
-            for &idx in analyze_result.leakmap.values() {
-                use std::fmt::Write as _;
-
-                if Some(idx) < stage_result.list.first().and_then(|list| list.last()).copied()
-                    || Some(idx) > stage_result.list.last().and_then(|list| list.first()).copied()
-                {
-                    continue
-                }
-                
-                let ev = &memory_analyzer.alloc_event[idx];
-
-                for stackid in ev.stackrange.clone() {
-                    let func_id = memory_analyzer.stacklist[stackid];
-                    let (_, addr, _) = entry_map.get(section_offset, func_id as usize);
-                    let name = symbol_map.get(addr as u64)
-                        .map(|sym| sym.name())
-                        .unwrap_or("unknown");
-                    let name = addr2line::demangle_auto(name.into(), None);
-
-                    if !line.is_empty() {
-                        line.push(';');
-                    }
-
-                    line.push_str(&name);
-                }
-
-                writeln!(line, " {}", ev.size)?;
-                writer.write_all(line.as_bytes())?;
-                line.clear();
-            }
+            memory_analyzer.write_flamegraph(
+                self,
+                &symbol_table,
+                &stage_result,
+                &analyze_result,
+                &path
+            )?;
         }
 
         if let Some(path) = self.plot.as_ref() {
-            use plotly::{ Plot, Scatter };
-
-            let mut plot = Plot::new();
-
-            for (stage_idx, list) in analyze_result.list.iter().enumerate() {
-                if self.fold {
-                    let x = (0..list.len()).collect();
-                    let y = list.clone();
-                    let t = stage_result.list[stage_idx]
-                        .iter()
-                        .map(|x| format!("e{}", x))
-                        .collect();
-                    let trace = Scatter::new(x, y).text_array(t);
-                    plot.add_trace(trace);
-                } else {
-                    let x = stage_result.list[stage_idx]
-                        .iter()
-                        .map(|x| format!("e{}", x))
-                        .collect();
-                    let y = list.clone();
-                    let trace = Scatter::new(x, y).text_template("e%{x}");
-                    plot.add_trace(trace);
-                }
-                
-            }
-
-            plot.write_html(path);
+            memory_analyzer.write_plot(
+                self.fold,
+                &stage_result,
+                &analyze_result,
+                &path
+            )?;
         }
 
         if !self.interactive {
             return Ok(());
         }
-
-        let symbol_table = SymbolTable {
-            section_offset, entry_map,
-            symbol_map
-        };
 
         let mut line = String::new();
         let stdin = io::stdin();
@@ -276,6 +231,7 @@ struct StageResult {
 struct AnalyzeResult {
     list: Vec<Vec<u64>>,
     leakmap: IndexMap<u64, usize>,
+    selectmap: IndexMap<u64, usize>,
 }
 
 struct SymbolTable<'a> {
@@ -429,14 +385,13 @@ impl MemoryAnalyzer {
         StageResult { list }
     }
 
-    fn analyze(&self, result: &StageResult) -> AnalyzeResult {
+    fn analyze(&self, subcmd: &SubCommand, result: &StageResult) -> anyhow::Result<AnalyzeResult> {
         let mut ptrmap = IndexMap::new();
+        let mut selectmap = IndexMap::new();
         let mut heaplist: Vec<Vec<u64>> = Vec::with_capacity(result.list.len());
         let mut heap_count = 0;
 
-        for (stage_idx, stage) in result.list.iter()
-            .enumerate()
-        {
+        for (stage_idx, stage) in result.list.iter().enumerate() {
             let mut current = Vec::with_capacity(stage.len());
             
             for &idx in stage {
@@ -469,13 +424,18 @@ impl MemoryAnalyzer {
                 current.push(heap_count);
             }
 
+            if subcmd.select == Some(stage_idx) {
+                selectmap = ptrmap.clone();
+            }
+
             heaplist.push(current);
         }
 
-        AnalyzeResult {
+        Ok(AnalyzeResult {
             list: heaplist,
-            leakmap: ptrmap
-        }
+            leakmap: ptrmap,
+            selectmap,
+        })
     }
 
     fn track(&self, event_id: usize) -> Vec<usize> {
@@ -529,6 +489,103 @@ impl MemoryAnalyzer {
         }
         
         Ok(())        
+    }
+
+    fn write_flamegraph(
+        &self,
+        subcmd: &SubCommand,
+        symtab: &SymbolTable,
+        stage_result: &StageResult,
+        analyze_result: &AnalyzeResult,
+        path: &Path
+    ) -> anyhow::Result<()> {
+        use std::fmt::Write as _;
+        
+        let writer = fs::File::create(path)?;
+        let mut writer = io::BufWriter::new(writer);
+        let mut line = String::new();
+
+        let push_stack = |line: &mut String, ev: &AllocEvent| {
+            for stackid in ev.stackrange.clone() {
+                let func_id = self.stacklist[stackid];
+                let (_, addr, _) = symtab.entry_map.get(symtab.section_offset, func_id as usize);
+                let name = symtab.symbol_map.get(addr as u64)
+                    .map(|sym| sym.name())
+                    .unwrap_or("unknown");
+                let name = addr2line::demangle_auto(name.into(), None);
+
+                if !line.is_empty() {
+                    line.push(';');
+                }
+
+                line.push_str(&name);
+            }            
+        };
+
+        if subcmd.select.is_some() {
+            for &idx in analyze_result.selectmap.values() {
+                let ev = &self.alloc_event[idx];
+                push_stack(&mut line, ev);
+                writeln!(line, " {}", ev.size)?;
+                writer.write_all(line.as_bytes())?;
+                line.clear();
+            }
+        } else {
+            for &idx in analyze_result.leakmap.values() {
+                if Some(idx) < stage_result.list.first().and_then(|list| list.last()).copied()
+                    || Some(idx) > stage_result.list.last().and_then(|list| list.first()).copied()
+                {
+                    continue
+                }
+            
+                let ev = &self.alloc_event[idx];
+                push_stack(&mut line, ev);
+                writeln!(line, " {}", ev.size)?;
+                writer.write_all(line.as_bytes())?;
+                line.clear();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_plot(
+        &self,
+        fold: bool,
+        stage_result: &StageResult,
+        analyze_result: &AnalyzeResult,
+        path: &Path
+    )
+        -> anyhow::Result<()>
+    {
+        use plotly::{ Plot, Scatter };
+
+        let mut plot = Plot::new();
+
+        for (stage_idx, list) in analyze_result.list.iter().enumerate() {
+            if fold {
+                let x = (0..list.len()).collect();
+                let y = list.clone();
+                let t = stage_result.list[stage_idx]
+                    .iter()
+                    .map(|x| format!("e{}", x))
+                    .collect();
+                let trace = Scatter::new(x, y).text_array(t);
+                plot.add_trace(trace);
+            } else {
+                let x = stage_result.list[stage_idx]
+                    .iter()
+                    .map(|x| format!("e{}", x))
+                    .collect();
+                let y = list.clone();
+                let trace = Scatter::new(x, y).text_template("e%{x}");
+                plot.add_trace(trace);
+            }
+            
+        }
+
+        plot.write_html(path);
+        Ok(())
     }
 }
 
