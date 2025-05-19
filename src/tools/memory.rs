@@ -1,6 +1,6 @@
 use std::fs;
 use std::ops::Range;
-use std::io::{ self, Read, BufRead };
+use std::io::{ self, BufRead, Read, Write };
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,7 +12,7 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use serde::de::IgnoredAny;
 use crate::layout;
 
-/// Memory Analyzer command
+/// Memory Analyze command
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "memory")]
 pub struct SubCommand {
@@ -30,7 +30,19 @@ pub struct SubCommand {
 
     /// interactive mode
     #[argh(switch)]
-    interactive: bool
+    interactive: bool,
+
+    /// leak flamegraph
+    #[argh(option)]
+    flamegraph: Option<PathBuf>,
+
+    /// alloc event plot
+    #[argh(option)]
+    plot: Option<PathBuf>,
+
+    /// fold stage
+    #[argh(switch)]
+    fold: bool
 }
 
 macro_rules! try_ {
@@ -94,8 +106,77 @@ impl SubCommand {
 
         drop(log);
 
-        let result = memory_analyzer.split_and_cut();
-        memory_analyzer.analyze(&result);
+        let stage_result = memory_analyzer.split_and_cut();
+        let analyze_result = memory_analyzer.analyze(&stage_result);
+        let symbol_map = symobj.symbol_map();
+
+        if let Some(path) = self.flamegraph.as_ref() {
+            let writer = fs::File::create(path)?;
+            let mut writer = io::BufWriter::new(writer);
+
+            let mut line = String::new();
+
+            for &idx in analyze_result.leakmap.values() {
+                use std::fmt::Write as _;
+
+                if Some(idx) < stage_result.list.first().and_then(|list| list.last()).copied()
+                    || Some(idx) > stage_result.list.last().and_then(|list| list.first()).copied()
+                {
+                    continue
+                }
+                
+                let ev = &memory_analyzer.alloc_event[idx];
+
+                for stackid in ev.stackrange.clone() {
+                    let func_id = memory_analyzer.stacklist[stackid];
+                    let (_, addr, _) = entry_map.get(section_offset, func_id as usize);
+                    let name = symbol_map.get(addr as u64)
+                        .map(|sym| sym.name())
+                        .unwrap_or("unknown");
+                    let name = addr2line::demangle_auto(name.into(), None);
+
+                    if !line.is_empty() {
+                        line.push(';');
+                    }
+
+                    line.push_str(&name);
+                }
+
+                writeln!(line, " {}", ev.size)?;
+                writer.write_all(line.as_bytes())?;
+                line.clear();
+            }
+        }
+
+        if let Some(path) = self.plot.as_ref() {
+            use plotly::{ Plot, Scatter };
+
+            let mut plot = Plot::new();
+
+            for (stage_idx, list) in analyze_result.list.iter().enumerate() {
+                if self.fold {
+                    let x = (0..list.len()).collect();
+                    let y = list.clone();
+                    let t = stage_result.list[stage_idx]
+                        .iter()
+                        .map(|x| format!("e{}", x))
+                        .collect();
+                    let trace = Scatter::new(x, y).text_array(t);
+                    plot.add_trace(trace);
+                } else {
+                    let x = stage_result.list[stage_idx]
+                        .iter()
+                        .map(|x| format!("e{}", x))
+                        .collect();
+                    let y = list.clone();
+                    let trace = Scatter::new(x, y).text_template("e%{x}");
+                    plot.add_trace(trace);
+                }
+                
+            }
+
+            plot.write_html(path);
+        }
 
         if !self.interactive {
             return Ok(());
@@ -103,7 +184,7 @@ impl SubCommand {
 
         let symbol_table = SymbolTable {
             section_offset, entry_map,
-            symbol_map: symobj.symbol_map()
+            symbol_map
         };
 
         let mut line = String::new();
@@ -114,6 +195,10 @@ impl SubCommand {
             
             line.clear();
             stdin.read_line(&mut line)?;
+
+            if line.is_empty() {
+                break
+            }
 
             let mut iter = line.split_ascii_whitespace();
             let Some(cmd) = iter.next()
@@ -136,8 +221,9 @@ impl SubCommand {
                             .map(|stackid| memory_analyzer.stacklist[stackid])
                             .map(|func_id| symbol_table.entry_map.get(symbol_table.section_offset, func_id as usize))
                             .and_then(|(_, addr, _)| symbol_table.symbol_map.get(addr as u64))
-                            .map(|name| addr2line::demangle_auto(name.name().into(), None));
-                        println!("{} {}\ttid:{}\tsize:{}\t{:?}", id, kind, ev.tid, ev.size, &last_stack);
+                            .map(|name| addr2line::demangle_auto(name.name().into(), None))
+                            .unwrap_or_default();
+                        println!("{} {}\ttid:{}\tsize:{}\t\t{}", id, kind, ev.tid, ev.size, &last_stack);
                     }
                     Ok(())
                 },
@@ -147,6 +233,13 @@ impl SubCommand {
                         .parse()?;
                     let no_stack = iter.next() == Some("--no-stack");
                     memory_analyzer.print_event(&symbol_table, event_id, no_stack)?;
+                    Ok(())
+                },
+                "stage-heap" => try_!{
+                    for (stage_idx, stage) in analyze_result.list.iter().enumerate() {
+                        println!("{}:\t{:?}", stage_idx, stage.last());
+                    }
+
                     Ok(())
                 },
                 _ => ()
@@ -180,8 +273,9 @@ struct StageResult {
     list: Vec<Vec<usize>>
 }
 
-struct HeapLine {
-    list: Vec<Vec<u64>>
+struct AnalyzeResult {
+    list: Vec<Vec<u64>>,
+    leakmap: IndexMap<u64, usize>,
 }
 
 struct SymbolTable<'a> {
@@ -335,13 +429,14 @@ impl MemoryAnalyzer {
         StageResult { list }
     }
 
-    fn analyze(&self, result: &StageResult) -> HeapLine {
+    fn analyze(&self, result: &StageResult) -> AnalyzeResult {
         let mut ptrmap = IndexMap::new();
         let mut heaplist: Vec<Vec<u64>> = Vec::with_capacity(result.list.len());
         let mut heap_count = 0;
-        let last_stage = result.list.len().saturating_sub(1);
 
-        for (stage_idx, stage) in result.list.iter().enumerate() {
+        for (stage_idx, stage) in result.list.iter()
+            .enumerate()
+        {
             let mut current = Vec::with_capacity(stage.len());
             
             for &idx in stage {
@@ -349,9 +444,7 @@ impl MemoryAnalyzer {
 
                 match ev.kind {
                     layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => {
-                        if let Some(oldidx) = ptrmap.insert(ev.ptr, idx)
-                            .filter(|_| stage_idx != last_stage)
-                        {
+                        if let Some(oldidx) = ptrmap.insert(ev.ptr, idx) {
                             println!(
                                 "[analyze/{}] bad alloc: ({}, {}) {:p}",
                                 stage_idx, oldidx, idx, ev.ptr as *const u8
@@ -361,9 +454,7 @@ impl MemoryAnalyzer {
                         heap_count += ev.size;
                     },
                     layout::Kind::DEALLOC | layout::Kind::REALLOC_DEALLOC => {
-                        if ptrmap.swap_remove(&ev.ptr).is_none()
-                            && stage_idx != last_stage
-                        {
+                        if ptrmap.swap_remove(&ev.ptr).is_none() {
                             println!(
                                 "[analyze/{}] bad free: {} {:p}",
                                 stage_idx, idx, ev.ptr as *const u8
@@ -381,7 +472,10 @@ impl MemoryAnalyzer {
             heaplist.push(current);
         }
 
-        HeapLine { list: heaplist }
+        AnalyzeResult {
+            list: heaplist,
+            leakmap: ptrmap
+        }
     }
 
     fn track(&self, event_id: usize) -> Vec<usize> {
@@ -442,8 +536,8 @@ fn kind_to_str(kind: layout::Kind) -> &'static str {
     match kind {
         layout::Kind::ALLOC => "alloc",
         layout::Kind::DEALLOC => "free",
-        layout::Kind::REALLOC_ALLOC => "(re)alloc",
-        layout::Kind::REALLOC_DEALLOC => "(re)free",
+        layout::Kind::REALLOC_ALLOC => "r/alloc",
+        layout::Kind::REALLOC_DEALLOC => "r/free",
         _ => unreachable!()
     }
 }

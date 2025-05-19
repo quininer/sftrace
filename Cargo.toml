@@ -25,6 +25,7 @@ micromegas-perfetto = "0.7"
 rayon = "1"
 siphasher = "1"
 indexmap = "2"
+plotly = { version = "0.12", features = [ "plotly_embed_js" ] }
 
 # xray patch
 libc = "0.2"
