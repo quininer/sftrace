@@ -46,7 +46,7 @@ pub struct SubCommand {
 
     /// select stage (flamegraph)
     #[argh(option)]
-    select: Option<usize>
+    select: Option<String>
 }
 
 macro_rules! try_ {
@@ -121,7 +121,6 @@ impl SubCommand {
 
         if let Some(path) = self.flamegraph.as_ref() {
             memory_analyzer.write_flamegraph(
-                self,
                 &symbol_table,
                 &stage_result,
                 &analyze_result,
@@ -190,7 +189,7 @@ impl SubCommand {
                     memory_analyzer.print_event(&symbol_table, event_id, no_stack)?;
                     Ok(())
                 },
-                "stage-heap" => try_!{
+                "stage-memory" => try_!{
                     for (stage_idx, stage) in analyze_result.list.iter().enumerate() {
                         println!("{}:\t{:?}", stage_idx, stage.last());
                     }
@@ -231,7 +230,7 @@ struct StageResult {
 struct AnalyzeResult {
     list: Vec<Vec<u64>>,
     leakmap: IndexMap<u64, usize>,
-    selectmap: IndexMap<u64, usize>,
+    selectmap: Vec<(usize, Vec<usize>)>,
 }
 
 struct SymbolTable<'a> {
@@ -387,9 +386,20 @@ impl MemoryAnalyzer {
 
     fn analyze(&self, subcmd: &SubCommand, result: &StageResult) -> anyhow::Result<AnalyzeResult> {
         let mut ptrmap = IndexMap::new();
-        let mut selectmap = IndexMap::new();
         let mut heaplist: Vec<Vec<u64>> = Vec::with_capacity(result.list.len());
         let mut heap_count = 0;
+        let mut selectmap = Vec::new();
+
+        let selectlist = if let Some(selectstr) = subcmd.select.as_ref() {
+            let mut list = Vec::new();
+            for n in selectstr.split(',') {
+                let n = n.parse()?;
+                list.push(n)
+            }
+            list
+        } else {
+            Vec::new()
+        };
 
         for (stage_idx, stage) in result.list.iter().enumerate() {
             let mut current = Vec::with_capacity(stage.len());
@@ -424,8 +434,8 @@ impl MemoryAnalyzer {
                 current.push(heap_count);
             }
 
-            if subcmd.select == Some(stage_idx) {
-                selectmap = ptrmap.clone();
+            if selectlist.contains(&stage_idx) {
+                selectmap.push((stage_idx, ptrmap.values().copied().collect()));
             }
 
             heaplist.push(current);
@@ -493,17 +503,12 @@ impl MemoryAnalyzer {
 
     fn write_flamegraph(
         &self,
-        subcmd: &SubCommand,
         symtab: &SymbolTable,
         stage_result: &StageResult,
         analyze_result: &AnalyzeResult,
         path: &Path
     ) -> anyhow::Result<()> {
         use std::fmt::Write as _;
-        
-        let writer = fs::File::create(path)?;
-        let mut writer = io::BufWriter::new(writer);
-        let mut line = String::new();
 
         let push_stack = |line: &mut String, ev: &AllocEvent| {
             for stackid in ev.stackrange.clone() {
@@ -522,15 +527,29 @@ impl MemoryAnalyzer {
             }            
         };
 
-        if subcmd.select.is_some() {
-            for &idx in analyze_result.selectmap.values() {
-                let ev = &self.alloc_event[idx];
-                push_stack(&mut line, ev);
-                writeln!(line, " {}", ev.size)?;
-                writer.write_all(line.as_bytes())?;
-                line.clear();
+        if !analyze_result.selectmap.is_empty() {
+            let mut line = String::new();
+            
+            for (stage_idx, list) in &analyze_result.selectmap {
+                let path = if analyze_result.selectmap.len() == 1 {
+                    format!("{}", path.display())
+                } else {
+                    format!("{}.{}", path.display(), stage_idx)
+                };
+                let mut writer = fs::File::create(path)?;
+                
+                for &idx in list {
+                    let ev = &self.alloc_event[idx];
+                    push_stack(&mut line, ev);
+                    writeln!(line, " {}", ev.size)?;
+                    writer.write_all(line.as_bytes())?;
+                    line.clear();
+                }
             }
         } else {
+            let mut writer = fs::File::create(path)?;
+            let mut line = String::new();
+            
             for &idx in analyze_result.leakmap.values() {
                 if Some(idx) < stage_result.list.first().and_then(|list| list.last()).copied()
                     || Some(idx) > stage_result.list.last().and_then(|list| list.first()).copied()
