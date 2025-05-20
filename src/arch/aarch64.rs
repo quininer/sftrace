@@ -1,7 +1,7 @@
 //! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_trampoline_AArch64.S
 
 use std::ptr;
-use std::sync::atomic::{ self, AtomicU16 };
+use std::sync::atomic::{ self, AtomicU32 };
 use serde::Serialize;
 use crate::events;
 use crate::util::{ u64_is_zero, u128_is_zero };
@@ -10,82 +10,73 @@ use crate::util::{ u64_is_zero, u128_is_zero };
 #[repr(C)]
 pub struct Args {
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub r11: u64,
+    pub x8: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub r10: u64,
+    pub x0: u64,
+
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q6: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q7: u128,    
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q4: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q5: u128,   
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q2: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q3: u128, 
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q0: u128,
+    #[serde(skip_serializing_if = "u128_is_zero")]
+    pub q1: u128,
     
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub r9: u64,
+    pub x7: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub r8: u64,
+    pub x30: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rcx: u64,
+    pub x5: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rsi: u64,
+    pub x6: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rdx: u64,
+    pub x3: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rax: u64,
+    pub x4: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rdi: u64,
-
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm7: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm6: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm5: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm4: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm3: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm2: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm1: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm0: u128,
+    pub x1: u64,
+    #[serde(skip_serializing_if = "u64_is_zero")]
+    pub x2: u64,
 }
 
-#[derive(Serialize)]
-#[repr(C)]
-pub struct ReturnValue {
-    #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rax: u64,
-    #[serde(skip_serializing_if = "u64_is_zero")]
-    pub rdx: u64,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm0: u128,
-    #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm1: u128
-}
+pub type ReturnValue = Args;
 
 macro_rules! helper {
     (save args) => {
         concat!(
-            "stp x1, x2, [sp, #-16]!",
-            "stp x3, x4, [sp, #-16]!",
-            "stp x5, x6, [sp, #-16]!",
-            "stp x7, x30, [sp, #-16]!",
-            "stp q0, q1, [sp, #-32]!",
-            "stp q2, q3, [sp, #-32]!",
-            "stp q4, q5, [sp, #-32]!",
-            "stp q6, q7, [sp, #-32]!",
-  // x8 is the indirect result register and needs to be preserved for the body of the function to use.
-            "stp x8, x0, [sp, #-16]!",
+            "stp x1, x2,  [sp, #-16]!\n",
+            "stp x3, x4,  [sp, #-16]!\n",
+            "stp x5, x6,  [sp, #-16]!\n",
+            "stp x7, x30, [sp, #-16]!\n",
+            "stp q0, q1,  [sp, #-32]!\n",
+            "stp q2, q3,  [sp, #-32]!\n",
+            "stp q4, q5,  [sp, #-32]!\n",
+            "stp q6, q7,  [sp, #-32]!\n",
+            // x8 is the indirect result register and needs to be preserved for the body of the function to use.
+            "stp x8, x0,  [sp, #-16]!\n",
         )
     };
     (restore args) => {
         concat!(
-            "ldp x8, x0, [sp], #16",
-            "ldp q6, q7, [sp], #32",
-            "ldp q4, q5, [sp], #32",
-            "ldp q2, q3, [sp], #32",
-            "ldp q0, q1, [sp], #32",
-            "ldp x7, x30, [sp], #16",
-            "ldp x5, x6, [sp], #16",
-            "ldp x3, x4, [sp], #16",
-            "ldp x1, x2, [sp], #16",            
+            "ldp x8, x0,  [sp], #16\n",
+            "ldp q6, q7,  [sp], #32\n",
+            "ldp q4, q5,  [sp], #32\n",
+            "ldp q2, q3,  [sp], #32\n",
+            "ldp q0, q1,  [sp], #32\n",
+            "ldp x7, x30, [sp], #16\n",
+            "ldp x5, x6,  [sp], #16\n",
+            "ldp x3, x4,  [sp], #16\n",
+            "ldp x1, x2,  [sp], #16\n",            
         )
     };
     (save return) => {
@@ -101,17 +92,22 @@ macro_rules! build {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             std::arch::naked_asm!(
-                "nop"
+                helper!(save args),
+
+                "mov w0, w17",
+                "mov x1, sp",
+
+                "bl {0}",
+
+                helper!(restore args),
+                "ret",
+
+                sym $sym,
             );
         }        
     };
     (exit: $name:ident -> $sym:expr) => {
-        #[unsafe(naked)]
-        pub unsafe extern "C" fn $name() {
-            std::arch::naked_asm!(
-                "nop"
-            );
-        }
+        build!(entry: $name -> $sym);
     }
 }
 
@@ -120,63 +116,63 @@ build!(exit : xray_exit      -> events::record_exit);
 build!(entry: xray_tailcall  -> events::record_tailcall);
 
 pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
-    const TRAMPOLINE: [u8; 8] = [0x3e, 0xff, 0x25, 0x01, 0x00, 0x00, 0x00, 0xcc];
+    const LDR_X16_8:  u32 = 0x58000050; // LDR ip0 #8
+    const BR_X16:     u32 = 0xD61F0200; // BR ip0
 
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));    
+    let addr = slot.cast::<u32>();
 
-    slot.copy_from_nonoverlapping(TRAMPOLINE.as_ptr(), TRAMPOLINE.len());
-    slot.byte_add(TRAMPOLINE.len()).cast::<u64>().write(target as u64);
+    addr.add(1).write(BR_X16);
+    addr.add(2).cast::<u64>().write(target as u64);
+    AtomicU32::from_ptr(addr)
+        .store(LDR_X16_8, atomic::Ordering::Release);
 }
 
-// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
-pub(crate) unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
-    const CALL_OP_CODE: u8 = 0xe8;
-    const MOV_R10_SEQ: u16 = 0xba41;
+// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_AArch64.cpp#L33
+unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
+    const STP_X0_X30_SP_M16E: u32 = 0xA9BF7BE0; // STP X0, X30, [SP, #-16]!
+    const LDR_W17_12:         u32 = 0x18000071; // LDR w17, #12
+    const BL_0:               u32 = 0x94000000; // BL #0
+    const B_16:               u32 = 0x14000004; // B #16
+    const LDP_X0_X30_SP_16:   u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
 
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
-    
     let trampoline = slot as usize;
 
-    let offset = (trampoline as isize) - (address + 11) as isize;
-    let offset = offset.try_into().unwrap();
+    let offset = (trampoline as isize) - (address + 8) as isize;
+    let offset: i32 = offset.try_into().unwrap();
+    let offset = offset >> 2; // div 4
+    let offset = offset as u32;
 
-    let addr = ptr::null_mut::<u8>().with_addr(address);
+    if offset > (1 << 26) {
+        panic!("offset greater than 26 bits: {:x}", offset);
+    }
+    
+    let bl_offset = BL_0 | offset;
+
+    let addr = ptr::null_mut::<u32>().with_addr(address);
 
     unsafe {
-        addr.byte_add(2).cast::<u32>().write(idx);
-        addr.byte_add(6).write(CALL_OP_CODE);
-        addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
+        addr.add(1).write(LDR_W17_12);
+        addr.add(2).write(bl_offset);
+        addr.add(3).write(B_16);
+        addr.add(4).write(idx);
+        addr.add(7).write(LDP_X0_X30_SP_16);
+        AtomicU32::from_ptr(addr.cast())
+            .store(STP_X0_X30_SP_M16E, atomic::Ordering::Release);
     }
+
+    unsafe {
+        clear_cache::clear_cache(addr, addr.add(7));
+    }
+}
+
+pub(crate) unsafe fn patch_entry(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
+    patch_sled(address, func_id, slot);
 }
 
 pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    const JMP_OP_CODE: u8 = 0xe9;
-    const MOV_R10_SEQ: u16 = 0xba41;
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
-    
-    let trampoline = slot as usize;
-
-    let offset = (trampoline as isize) - (address + 11) as isize;
-    let offset = offset.try_into().unwrap();
-
-    let addr = ptr::null_mut::<u8>().with_addr(address);
-
-    unsafe {
-        addr.byte_add(2).cast::<u32>().write(func_id);
-        addr.byte_add(6).write(JMP_OP_CODE);
-        addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
-    }
+    patch_sled(address, func_id, slot);
 }
 
-// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L224
 pub(crate) unsafe fn patch_tailcall(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_entry(address, func_id, slot);
+    patch_sled(address, func_id, slot);
 }

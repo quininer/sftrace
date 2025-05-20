@@ -15,6 +15,7 @@ unsafe extern "C" {
     );    
 }
 
+#[cfg(target_arch = "x86_64")]
 macro_rules! build_slot {
     ( $( $name:ident );* $( ; )? ) => {
         $(
@@ -24,6 +25,7 @@ macro_rules! build_slot {
     ( @ $name:ident ) => {
         #[unsafe(naked)]
         unsafe extern "C" fn $name() {
+            // ret + nop * 15
             std::arch::naked_asm!(
                 "ret",
                 "nop",
@@ -35,6 +37,30 @@ macro_rules! build_slot {
                 "nop",
                 "nop",
                 "nop",
+                "nop",
+                "nop",
+                "nop",
+                "nop",
+                "nop",
+                "nop",
+            );
+        }
+    };
+}
+
+#[cfg(target_arch = "aarch64")]
+macro_rules! build_slot {
+    ( $( $name:ident );* $( ; )? ) => {
+        $(
+            build_slot!(@$name);
+        )*
+    };
+    ( @ $name:ident ) => {
+        #[unsafe(naked)]
+        unsafe extern "C" fn $name() {
+            // ret + nop * 6
+            std::arch::naked_asm!(
+                "ret",
                 "nop",
                 "nop",
                 "nop",

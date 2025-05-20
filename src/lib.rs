@@ -120,9 +120,29 @@ fn patch_xray(
             .map(|(text_addr, text_len)| {
                 let addr = text_addr.0 & !(page_size - 1);
                 let len = text_addr.0 + text_len - addr;
+                let len = (len + page_size - 1) & !(page_size - 1);
                 (addr, len)
             })
             else { return };
+
+        // dbg!(buf.as_ptr(), buf.len());
+
+        // let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
+        // let section_offset: usize = xray_section.address().try_into().unwrap();
+
+        // let min_addr = layout::XRayInstrMap(entry_map)
+        //     .iter(base.0 + section_offset)
+        //     .map(|(_, addr, _, _)| addr)
+        //     .min()
+        //     .unwrap();
+        // let max_addr = layout::XRayInstrMap(entry_map)
+        //     .iter(base.0 + section_offset)
+        //     .map(|(_, addr, _, _)| addr)
+        //     .max()
+        //     .unwrap();
+        // dbg!(min_addr, max_addr);
+        // let text_addr = min_addr & !(page_size - 1);
+        // let text_len = max_addr - text_addr + 32;
 
         {
             let mut fd = fs::OpenOptions::new()
@@ -148,8 +168,12 @@ fn patch_xray(
                 text_len,
                 libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
             ) != 0 {
-                panic!("text segment unlock failed: {:?}", std::io::Error::last_os_error());
-            }            
+                panic!(
+                    "text segment {:?} unlock failed: {:?}",
+                    (text_addr as *mut u8, text_len),
+                    std::io::Error::last_os_error()
+                );
+            }
         }, |_| unsafe {
             // lock back
             if libc::mprotect(
@@ -180,8 +204,14 @@ fn patch_xray(
 
             let func_id = FuncId::pack(idx, enable_log).unwrap();
             let func_id = func_id.0;
-            let addr = base.0 + addr;
-            
+
+            let base = if cfg!(target_os = "macos") {
+                0
+            } else {
+                base.0
+            };
+            let addr = base + addr;
+
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
             unsafe {
                 match entry.kind {

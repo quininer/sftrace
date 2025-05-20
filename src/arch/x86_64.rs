@@ -217,9 +217,6 @@ pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
 pub(crate) unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const CALL_OP_CODE: u8 = 0xe8;
     const MOV_R10_SEQ: u16 = 0xba41;
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
     
     let trampoline = slot as usize;
 
@@ -240,9 +237,6 @@ pub(crate) unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "
 pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
     const JMP_OP_CODE: u8 = 0xe9;
     const MOV_R10_SEQ: u16 = 0xba41;
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
     
     let trampoline = slot as usize;
 

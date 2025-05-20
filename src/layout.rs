@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use zerocopy::{ IntoBytes, FromBytes, Immutable, KnownLayout };
+use zerocopy::byteorder::{ NativeEndian, U64 };
 use serde::{ Serialize, Deserialize };
 
 pub const SIGN_TRACE: &[u8; 8] = b"sf\0trace";
@@ -21,6 +22,7 @@ pub struct Event<ARGS, RV, ALLOC> {
     pub tid: u32,
     #[serde(rename = "f")]
     #[serde(skip_serializing_if = "u32_is_zero")]
+    #[serde(default)]
     pub func_id: u32,
     #[serde(rename = "T")]
     pub time: u64,
@@ -77,8 +79,8 @@ pub fn build_id_hash(build_id: &[u8]) -> u64 {
 #[derive(Clone, Copy, FromBytes, Immutable, KnownLayout)]
 #[repr(C)]
 pub struct XRayFunctionEntry {
-    pub address: usize,
-    pub function: usize,
+    pub address: U64<NativeEndian>,
+    pub function: U64<NativeEndian>,
     pub kind: u8,
     pub always_instrument: u8,
     pub version: u8,
@@ -98,8 +100,8 @@ impl XRayInstrMap<'_> {
 
         // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
         // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199                
-        let address = entry_offset + entry.address;
-        let function = entry_offset + entry.function + std::mem::size_of::<usize>();
+        let address = entry_offset + entry.address.get() as usize;
+        let function = entry_offset + entry.function.get() as usize + std::mem::size_of::<usize>();
 
         (address, function, entry)
     }
