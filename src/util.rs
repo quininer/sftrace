@@ -1,9 +1,3 @@
-pub fn thread_id() -> libc::pid_t {
-    unsafe {
-        libc::syscall(libc::SYS_gettid) as libc::pid_t
-    }
-}
-
 pub fn page_size() -> usize {
     unsafe {
         libc::sysconf(libc::_SC_PAGE_SIZE) as usize

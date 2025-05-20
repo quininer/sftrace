@@ -18,7 +18,7 @@ pub struct Metadata {
 #[derive(Debug)]
 pub struct Event<ARGS, RV, ALLOC> {
     #[serde(rename = "t")]
-    pub tid: i32,
+    pub tid: u32,
     #[serde(rename = "f")]
     #[serde(skip_serializing_if = "u32_is_zero")]
     pub func_id: u32,

@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.4/compiler-rt/lib/xray/xray_trampoline_x86_64.S
+//! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_trampoline_AArch64.S
 
 use std::ptr;
 use std::sync::atomic::{ self, AtomicU16 };
@@ -62,16 +62,37 @@ pub struct ReturnValue {
 
 macro_rules! helper {
     (save args) => {
-        concat!("nop")
+        concat!(
+            "stp x1, x2, [sp, #-16]!",
+            "stp x3, x4, [sp, #-16]!",
+            "stp x5, x6, [sp, #-16]!",
+            "stp x7, x30, [sp, #-16]!",
+            "stp q0, q1, [sp, #-32]!",
+            "stp q2, q3, [sp, #-32]!",
+            "stp q4, q5, [sp, #-32]!",
+            "stp q6, q7, [sp, #-32]!",
+  // x8 is the indirect result register and needs to be preserved for the body of the function to use.
+            "stp x8, x0, [sp, #-16]!",
+        )
     };
     (restore args) => {
-        concat!("nop")
+        concat!(
+            "ldp x8, x0, [sp], #16",
+            "ldp q6, q7, [sp], #32",
+            "ldp q4, q5, [sp], #32",
+            "ldp q2, q3, [sp], #32",
+            "ldp q0, q1, [sp], #32",
+            "ldp x7, x30, [sp], #16",
+            "ldp x5, x6, [sp], #16",
+            "ldp x3, x4, [sp], #16",
+            "ldp x1, x2, [sp], #16",            
+        )
     };
     (save return) => {
-        concat!("nop")
+        helper!(save args)
     };
     (restore return) => {
-        concat!("nop")
+        helper!(restore args)
     }
 }
 

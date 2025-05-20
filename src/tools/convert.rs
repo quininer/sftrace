@@ -154,7 +154,7 @@ struct State<'g> {
     process_id: i32,
     section_offset: usize,
     entry_map: layout::XRayInstrMap<'g>,
-    stack: HashMap<i32, Vec<u32>>,
+    stack: HashMap<u32, Vec<u32>>,
 }
 
 struct Addr2Line {
@@ -171,7 +171,7 @@ struct Frame {
 
 #[derive(Default)]
 struct PacketWriter {
-    threads: HashSet<i32>,
+    threads: HashSet<u32>,
     addrmap: HashMap<u64, (Option<u64>, Option<u64>)>,
     event_names: HashMap<String, u64>,
     source_locations: HashMap<(String, Option<u32>), u64>,
@@ -254,7 +254,7 @@ impl PacketWriter {
             track_desc.parent_uuid = Some(pid);
             track_desc.thread = Some(micromegas_perfetto::protos::ThreadDescriptor {
                 pid: Some(global_state.process_id),
-                tid: Some(tid),
+                tid: Some(tid.try_into().unwrap()),
                 ..Default::default()
             });
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));

@@ -2,14 +2,14 @@ use std::io::Write;
 use std::time::Instant;
 use std::cell::RefCell;
 use std::sync::LazyLock;
-use crate::util::thread_id;
+use std::sync::atomic::{ self, AtomicU32 };
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
 use crate::{ OUTPUT, FuncId };
 
 
 struct Local {
-    tid: Option<libc::pid_t>,
+    tid: Option<u32>,
     buf: Vec<u8>,
     line: Vec<u8>,
 }
@@ -59,7 +59,12 @@ impl Local {
         let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
             kind, func_id, alloc_event,
             time: dur2u64(NOW.elapsed()),
-            tid: (*self.tid.get_or_insert_with(thread_id)),
+            tid: *self.tid.get_or_insert_with(|| {
+                // TODO use std::thread::Thread.id().as_u64()
+                static THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+                THREAD_ID.fetch_add(1, atomic::Ordering::Relaxed)
+            }),
             args: args.filter(|_| enable_log),
             return_value: return_value.filter(|_| enable_log),
         };

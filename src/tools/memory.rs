@@ -207,7 +207,7 @@ impl SubCommand {
 struct MemoryAnalyzer {
     milestone_func_id: u32,
     milestones: Vec<u64>,
-    threads: HashMap<i32, Vec<u32>>,
+    threads: HashMap<u32, Vec<u32>>,
     stacklist: Vec<u32>,
     alloc_event: Vec<AllocEvent>,
 }
@@ -215,7 +215,7 @@ struct MemoryAnalyzer {
 #[derive(Debug)]
 struct AllocEvent {
     kind: layout::Kind,
-    tid: i32,
+    tid: u32,
     time: u64,
     ptr: u64,
     size: u64,
