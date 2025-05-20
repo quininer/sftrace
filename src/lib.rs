@@ -3,10 +3,9 @@ mod layout;
 mod events;
 mod arch;
 
+use std::fs;
 use std::io::Write;
-use std::{ ptr, fs };
 use std::sync::OnceLock;
-use std::sync::atomic::{ self, AtomicU16 };
 use object::{ Object, ObjectSection };
 use util::{ ScopeGuard, page_size };
 
@@ -66,10 +65,6 @@ fn patch_xray(
 ) {
     use zerocopy::FromBytes;
     use findshlibs::{ SharedLibrary, Segment };
-
-    const _ASSERT_ARCH: () = if !cfg!(target_pointer_width = "64") {
-        panic!("64bit only")
-    };
 
     let Some(outfile) = std::env::var_os("SFTRACE_OUTPUT_FILE")
         else { return };
@@ -191,84 +186,22 @@ fn patch_xray(
             unsafe {
                 match entry.kind {
                     // entry
-                    0 => patch_entry(addr, func_id, entry_slot),
+                    0 => arch::patch_entry(addr, func_id, entry_slot),
                     // exit
-                    1 => patch_exit(addr, func_id, exit_slot),
+                    1 => arch::patch_exit(addr, func_id, exit_slot),
                     // tail call
-                    2 => patch_tailcall(addr, func_id, tailcall_slot),
+                    2 => arch::patch_tailcall(addr, func_id, tailcall_slot),
                     _ => eprintln!("unsupport kind: {}", entry.kind)
                 }
             }
         }
 
         unsafe {
-            patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
-            patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
-            patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
+            arch::patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
+            arch::patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
+            arch::patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
         }
     });    
-}
-
-unsafe fn patch_slot(slot: *mut u8, target: usize) {
-    const TRAMPOLINE: [u8; 8] = [0x3e, 0xff, 0x25, 0x01, 0x00, 0x00, 0x00, 0xcc];
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));    
-
-    slot.copy_from_nonoverlapping(TRAMPOLINE.as_ptr(), TRAMPOLINE.len());
-    slot.byte_add(TRAMPOLINE.len()).cast::<u64>().write(target as u64);
-}
-
-// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
-unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
-    const CALL_OP_CODE: u8 = 0xe8;
-    const MOV_R10_SEQ: u16 = 0xba41;
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
-    
-    let trampoline = slot as usize;
-
-    let offset = (trampoline as isize) - (address + 11) as isize;
-    let offset = offset.try_into().unwrap();
-
-    let addr = ptr::null_mut::<u8>().with_addr(address);
-
-    unsafe {
-        addr.byte_add(2).cast::<u32>().write(idx);
-        addr.byte_add(6).write(CALL_OP_CODE);
-        addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
-    }
-}
-
-unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    const JMP_OP_CODE: u8 = 0xe9;
-    const MOV_R10_SEQ: u16 = 0xba41;
-
-    // TODO support more arch
-    assert!(cfg!(target_arch = "x86_64"));
-    
-    let trampoline = slot as usize;
-
-    let offset = (trampoline as isize) - (address + 11) as isize;
-    let offset = offset.try_into().unwrap();
-
-    let addr = ptr::null_mut::<u8>().with_addr(address);
-
-    unsafe {
-        addr.byte_add(2).cast::<u32>().write(func_id);
-        addr.byte_add(6).write(JMP_OP_CODE);
-        addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
-    }
-}
-
-// https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L224
-unsafe fn patch_tailcall(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_entry(address, func_id, slot);
 }
 
 extern "C" fn shutdown() {
