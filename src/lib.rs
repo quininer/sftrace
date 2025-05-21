@@ -7,7 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::sync::OnceLock;
 use object::{ Object, ObjectSection };
-use util::{ ScopeGuard, page_size };
+use util::{ MProtect, page_size };
 
 
 #[no_mangle]
@@ -161,29 +161,9 @@ fn patch_xray(
             OUTPUT.set(fd).ok().expect("already initialized");
         }
 
-        let _guard = ScopeGuard(unsafe {
-            // unlock page protect
-            if libc::mprotect(
-                text_addr as *mut _,
-                text_len,
-                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
-            ) != 0 {
-                panic!(
-                    "text segment {:?} unlock failed: {:?}",
-                    (text_addr as *mut u8, text_len),
-                    std::io::Error::last_os_error()
-                );
-            }
-        }, |_| unsafe {
-            // lock back
-            if libc::mprotect(
-                text_addr as *mut _,
-                text_len,
-                libc::PROT_READ | libc::PROT_EXEC
-            ) != 0 {
-                panic!("text segment lock failed: {:?}", std::io::Error::last_os_error());
-            }
-        });
+        let _guard = unsafe {
+            MProtect::unlock(text_addr as *mut u8, text_len)
+        };
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
         let section_offset: usize = xray_section.address().try_into().unwrap();

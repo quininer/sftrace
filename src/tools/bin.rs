@@ -21,7 +21,7 @@ struct Options {
 enum SubCommand {
     Convert(convert::SubCommand),
     Filter(filter::SubCommand),
-    Memory(memory::SubCommand)
+    Memory(memory::SubCommand),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     match options.subcmd {
         SubCommand::Convert(cmd) => cmd.exec(),
         SubCommand::Filter(cmd) => cmd.exec(),
-        SubCommand::Memory(cmd) => cmd.exec()
+        SubCommand::Memory(cmd) => cmd.exec(),
     }
 }
 
