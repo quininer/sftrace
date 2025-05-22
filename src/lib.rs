@@ -186,7 +186,14 @@ fn patch_xray(
             let func_id = func_id.0;
 
             let base = if cfg!(target_os = "macos") {
-                0
+                match obj.kind() {
+                    object::ObjectKind::Executable => 0,
+                    object::ObjectKind::Dynamic => base.0,
+                    kind => {
+                        eprintln!("unsupported object kind: {:?}", kind);
+                        base.0
+                    }
+                }
             } else {
                 base.0
             };

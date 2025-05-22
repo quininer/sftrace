@@ -135,18 +135,23 @@ unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const B_16:               u32 = 0x14000004; // B #16
     const LDP_X0_X30_SP_16:   u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
 
+    fn sign_extend26(data: u32) -> u32 {
+        let n = 32 - 26;
+        
+        (data << n) >> n
+    }
+
     let trampoline = slot as usize;
 
     let offset = (trampoline as isize) - (address + 8) as isize;
     let offset: i32 = offset.try_into().unwrap();
     let offset = offset >> 2; // div 4
-    let offset = offset as u32;
 
-    if offset > (1 << 26) {
-        panic!("offset greater than 26 bits: {:x}", offset);
+    if offset.abs() > 1 << 25 {
+        panic!("offset greater than +/-128M: {:x}", offset);
     }
-    
-    let bl_offset = BL_0 | offset;
+
+    let bl_offset = BL_0 | sign_extend26(offset as u32);
 
     let addr = ptr::null_mut::<u32>().with_addr(address);
 
