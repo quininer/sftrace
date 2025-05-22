@@ -49,15 +49,10 @@ static A: sftrace_setup::SftraceAllocator<std::alloc::System> =
   sftrace_setup::SftraceAllocator(std::alloc::System);
 ```
 
-The setup crate does not provide symbols to link against,
-you can point it to so. or simply allow symbols to be undefined.
+When compiling, we need to specify the directory where `libsftrace.so` is located.
 
-```toml
-[target.'cfg(target_os = "linux")']
-rustflags = [ "-Clink-args=-Wl,--warn-unresolved-symbols" ]
-
-[target.'cfg(target_vendor = "apple")']
-rustflags = [ "-Clink-args=-Wl,-undefined,dynamic_lookup" ]
+```shell
+env SFTRACE_DYLIB_DIR="$TOPATH" cargo build
 ```
 
 ### Run
@@ -65,10 +60,13 @@ rustflags = [ "-Clink-args=-Wl,-undefined,dynamic_lookup" ]
 Run the program on specified environment variables
 
 ```shell
-env LD_PRELOAD="$TOPATH/libsftrace.so" \
+env LD_LIBRARY_PATH="$TOPATH" \
   SFTRACE_OUTPUT_FILE="$OUTDIR/sf.log" \
   your-program
 ```
+
+> In an ideal world, we wouldn't need to specify `LD_LIBRARY_PATH`.
+> But right now rpath doesn't really work. see https://github.com/rust-lang/cargo/issues/5077
 
 Note that this may generate very large logs, which may require a lot of memory when analyzing.
 You can generate filter files to keep only the functions you are interested in.
@@ -93,7 +91,7 @@ You need to run the program on lldb (or any ptrace debugger).
 
 ```shell
 lldb \
-    -O "env DYLD_INSERT_LIBRARIES=$TOPATH/libsftrace.dylib" \
+    -O "env DYLD_LIBRARY_PATH=$TOPATH" \
     -O "env SFTRACE_OUTPUT_FILE=$OUTDIR/sf.log" \
     your-program
 ```

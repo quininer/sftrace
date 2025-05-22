@@ -107,13 +107,89 @@ macro_rules! build {
         }        
     };
     (exit: $name:ident -> $sym:expr) => {
-        build!(entry: $name -> $sym);
-    }
+        // HACK https://github.com/llvm/llvm-project/issues/141051
+        // 
+        // llvm seems to report tailcall as exit,
+        // so we also need additional backup registers for exit        
+        #[unsafe(naked)]
+        pub unsafe extern "C" fn $name() {
+            std::arch::naked_asm!(
+                // caller-saved
+                //
+                // This is used to handle the case where
+                // a tail call is made by jumping through a local variable register.
+                //
+                // ```
+                // nop;
+                // br x9;
+                // ```
+                "stp x9,  x10, [sp, #-16]!",
+                "stp x11, x12, [sp, #-16]!",
+                "stp x13, x14, [sp, #-16]!",
+                "stp x15, x16, [sp, #-16]!",
+
+                helper!(save args),
+
+                "mov w0, w17",
+                "mov x1, sp",
+                "bl {0}",
+
+                helper!(restore args),
+
+                "ldp x15, x16, [sp], #16",                
+                "ldp x13, x14, [sp], #16",
+                "ldp x11, x12, [sp], #16",
+                "ldp x9,  x10, [sp], #16",
+
+                "ret",
+
+                sym $sym,
+            );
+        }
+        
+        // build!(entry: $name -> $sym);
+    };
+    (tailcall: $name:ident -> $sym:expr) => {
+        #[unsafe(naked)]
+        pub unsafe extern "C" fn $name() {
+            std::arch::naked_asm!(
+                // caller-saved
+                //
+                // This is used to handle the case where
+                // a tail call is made by jumping through a local variable register.
+                //
+                // ```
+                // nop;
+                // br x9;
+                // ```
+                "stp x9,  x10, [sp, #-16]!",
+                "stp x11, x12, [sp, #-16]!",
+                "stp x13, x14, [sp, #-16]!",
+                "stp x15, x16, [sp, #-16]!",
+
+                helper!(save args),
+
+                "mov w0, w17",
+                "bl {0}",
+
+                helper!(restore args),
+
+                "ldp x15, x16, [sp], #16",                
+                "ldp x13, x14, [sp], #16",
+                "ldp x11, x12, [sp], #16",
+                "ldp x9,  x10, [sp], #16",
+
+                "ret",
+
+                sym $sym,
+            );
+        }        
+    };
 }
 
-build!(entry: xray_entry     -> events::record_entry);
-build!(exit : xray_exit      -> events::record_exit);
-build!(entry: xray_tailcall  -> events::record_tailcall);
+build!(entry   : xray_entry     -> events::record_entry);
+build!(exit    : xray_exit      -> events::record_exit);
+build!(tailcall: xray_tailcall  -> events::record_tailcall);
 
 pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
     const LDR_X16_8:  u32 = 0x58000050; // LDR ip0 #8
