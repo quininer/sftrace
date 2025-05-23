@@ -1,13 +1,11 @@
 use std::fs;
 use std::io::Write;
-use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::collections::HashSet;
 use argh::FromArgs;
-use anyhow::Context;
-use object::{ Object, ObjectSymbol };
-use rayon::prelude::*;
+use object::Object;
 use zerocopy::IntoBytes;
-use crate::{ layout, config };
+use crate::layout;
 
 
 /// Filter command
@@ -16,19 +14,15 @@ use crate::{ layout, config };
 pub struct SubCommand {
     /// object file path
     #[argh(option, short = 'p')]
-    path: Option<PathBuf>,
+    path: PathBuf,
 
-    /// filter by rlib
-    #[argh(option, short = 'r')]
-    rlibs: Option<String>,
+    /// filter by list
+    #[argh(option)]
+    list: Option<PathBuf>,
 
     /// filter by regex
-    #[argh(option, short = 'R')]
+    #[argh(option, short = 'r')]
     regex: Option<String>,
-
-    /// filter config
-    #[argh(option, short = 'c')]
-    config: Option<PathBuf>,
 
     /// filter-file output path
     #[argh(option, short = 'o')]
@@ -37,103 +31,58 @@ pub struct SubCommand {
 
 impl SubCommand {
     pub fn exec(&self) -> anyhow::Result<()> {
-        let config = if let Some(path) = self.config.as_ref() {
-            let buf = fs::read_to_string(path)?;
-            let mut config: config::Config = toml::from_str(&buf)?;
-            config.make();
-            config
-        } else {
-            Default::default()
-        };
-
-        let objpath = config.path()
-            .or(self.path.as_deref())
-            .context("need object path")?;
-        let objfd = fs::File::open(objpath)?;
+        let objfd = fs::File::open(&self.path)?;
         let objbuf = unsafe { memmap2::Mmap::map(&objfd)? };
         let obj = object::File::parse(&*objbuf)?;
 
-        if let Some(rlibs) = config.rlibs().or(self.rlibs.as_deref()) {
-            let obj = &obj;
-        
-            let mut map = glob::glob(rlibs)?
-                .filter_map(Result::ok)
-                .filter(|entry| entry.extension() == Some(OsStr::new("rlib")))
-                .par_bridge()
-                .filter_map(|entry| {
-                    eprintln!("load {:?}", entry);
-
-                    fs::File::open(&entry).ok()
-                })
-                .map(|fd| {
-                    let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
-                    let rlib = object::read::archive::ArchiveFile::parse(&*buf).unwrap();
-                    let syms = rlib.symbols().unwrap();
-
-                    syms.into_iter()
-                        .flatten()
-                        .filter_map(Result::ok)
-                        .par_bridge()
-                        .filter_map(|sym| {
-                            obj.symbol_by_name_bytes(sym.name())
-                                .filter(|sym| matches!(sym.kind(), object::SymbolKind::Text))
-                                .filter(|sym| sym.is_definition())
-                        })
-                        .map(|sym| {
-                            let name = sym.name_bytes().unwrap();
-                            let hint = config.record_args().binary_search_by_key(&name, |s| s.as_bytes()).is_ok();
-                            layout::FilterMark::new(sym.address(), hint).expect("big address")
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .reduce(Vec::new, |mut sum, mut next| {
-                    sum.append(&mut next);
-                    sum
-                });
-            map.par_sort();
-            map.dedup();
-
-            println!("done {:?}", map.len());
-
-            let mut output = fs::File::create(&self.output)?;
-            let hash = obj.build_id()
-                .ok()
-                .flatten()
-                .map(layout::build_id_hash)
-                .unwrap_or_default();
-            output.write_all(layout::SIGN_FILTE)?;
-            output.write_all(&hash.to_ne_bytes())?;
-            output.write_all(layout::FilterMode::FILTER.as_bytes())?;
-            output.write_all(map.as_bytes())?;
+        let listbuf = if let Some(path) = self.list.as_ref() {
+            fs::read_to_string(path)?
         } else {
-            let map = obj.symbols()
-                .filter(|sym| matches!(sym.kind(), object::SymbolKind::Text))
-                .filter(|sym| sym.is_definition())
-                .filter(|sym| sym.name_bytes()
-                    .ok()
-                    .filter(|name| config
-                        .record_args()
-                        .binary_search_by_key(name, |s| s.as_bytes())
-                        .is_ok()
-                    )
-                    .is_some()
-                )
-                .map(|sym| layout::FilterMark::new(sym.address(), true).expect("big address"))
-                .collect::<Vec<_>>();
+            String::new()
+        };
+        let listmap = listbuf.lines().collect::<HashSet<_>>();
 
-            println!("done {:?}", map.len());
+        let symmap = obj.symbol_map();
+        let mut map = Vec::new();
 
-            let mut output = fs::File::create(&self.output)?;
-            let hash = obj.build_id()
-                .ok()
-                .flatten()
-                .map(layout::build_id_hash)
-                .unwrap_or_default();
-            output.write_all(layout::SIGN_FILTE)?;
-            output.write_all(&hash.to_ne_bytes())?;
-            output.write_all(layout::FilterMode::MARK.as_bytes())?;
-            output.write_all(map.as_bytes())?;            
+        let maybe_regex = if let Some(s) = self.regex.as_ref() {
+            Some(regex::Regex::new(s)?)
+        } else {
+            None
+        };
+
+        for sym in symmap.symbols() {
+            let mut hint = false;
+
+            if listmap.contains(sym.name()) {
+                hint = true;
+            } else if let Some(re) = maybe_regex.as_ref() {
+                if re.is_match(sym.name()) {
+                    hint = true;
+                }
+            }
+
+            if hint {
+                let mark = layout::FilterMark::new(sym.address(), layout::FuncFlag::empty()).unwrap();
+                map.push(mark);
+            }
         }
+
+        map.sort_by_key(|mark| mark.addr());
+        map.dedup();
+
+        println!("done {:?}", map.len());
+
+        let mut output = fs::File::create(&self.output)?;
+        let hash = obj.build_id()
+            .ok()
+            .flatten()
+            .map(layout::build_id_hash)
+            .unwrap_or_default();
+        output.write_all(layout::SIGN_FILTE)?;
+        output.write_all(&hash.to_ne_bytes())?;
+        output.write_all(layout::FilterMode::FILTER.as_bytes())?;
+        output.write_all(map.as_bytes())?;        
 
         Ok(())   
     }

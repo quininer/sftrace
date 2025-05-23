@@ -159,6 +159,7 @@ pub struct FilterMap {
 pub struct FilterMode(u64);
 
 impl FilterMode {
+    #[allow(dead_code)]
     pub const MARK: FilterMode = FilterMode(0);
     pub const FILTER: FilterMode = FilterMode(1);
 }
@@ -208,20 +209,26 @@ impl FilterMap {
 
 #[allow(dead_code)]
 impl FilterMark {
-    pub fn new(addr: u64, enable_log: bool) -> Option<FilterMark> {
-        if addr <= 1 << 54 {
-            let flag = (enable_log as u64) << 54;
-            Some(FilterMark(addr | flag))
-        } else {
-            None
-        }
+    const CAP: usize = 64 - 8;
+    
+    pub fn new(addr: u64, flag: FuncFlag) -> Option<FilterMark> {
+        let flag = (flag.bits() as u64) << Self::CAP;
+
+        (addr < (1 << Self::CAP)).then(|| FilterMark(addr | flag))
     }
 
     pub fn addr(self) -> u64 {
-        self.0 & ((1 << 54) - 1)
+        self.0 & ((1 << Self::CAP) - 1)
     }
 
-    pub fn log(self) -> bool {
-        ((self.0 >> 54) & 1) != 0
+    pub fn flag(self) -> FuncFlag {
+        FuncFlag::from_bits_truncate((self.0 >> Self::CAP) as u8)        
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct FuncFlag: u8 {
+        const LOG   = 0b00000001;
     }
 }

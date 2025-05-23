@@ -62,7 +62,7 @@ impl SubCommand {
         let xray_buf = xray_section.uncompressed_data()?;
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(xray_buf.as_ref())
-            .map_err(|_| anyhow::format_err!("xray_instr_map parse failed"))?;
+            .map_err(|err| anyhow::format_err!("xray_instr_map parse failed: {:?}", err))?;
         let entry_map = layout::XRayInstrMap(entry_map);
 
         if let Ok(Some(build_id)) = symobj.build_id() {

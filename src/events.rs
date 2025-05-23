@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use std::sync::atomic::{ self, AtomicU32 };
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
-use crate::{ OUTPUT, FuncId, FuncFlag };
+use crate::{ OUTPUT, FuncId };
 
 
 struct Local {

@@ -2,7 +2,6 @@
 mod layout;
 mod util;
 
-mod config;
 mod convert;
 mod filter;
 mod memory;

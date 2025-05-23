@@ -149,14 +149,13 @@ fn patch_xray(
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
 
         for entry in layout::XRayInstrMap(entry_map).iter(xray_section.address()) {
-            let mut flag = FuncFlag::empty();
+            let mut flag = layout::FuncFlag::empty();
             
             if let Some(filter) = maybe_filter {
                 match (filter.mode(), filter.check(entry.function())) {
-                    (layout::FilterMode::MARK, Some(mark)) if mark.log() => flag |= FuncFlag::LOG,
+                    (layout::FilterMode::MARK, Some(mark)) => flag |= mark.flag(),
                     (layout::FilterMode::MARK, _) => (),
-                    (layout::FilterMode::FILTER, Some(mark)) if mark.log() => flag |= FuncFlag::LOG,
-                    (layout::FilterMode::FILTER, Some(_)) => (),
+                    (layout::FilterMode::FILTER, Some(mark)) => flag |= mark.flag(),
                     (layout::FilterMode::FILTER, None) => continue,
                     (..) => continue
                 }
@@ -210,26 +209,19 @@ extern "C" fn shutdown() {
 #[derive(Clone, Copy)]
 struct FuncId(u32);
 
-bitflags::bitflags! {
-    #[derive(Clone, Copy)]
-    pub struct FuncFlag: u8 {
-        const LOG   = 0b00000001;
-    }
-}
-
 impl FuncId {
-    fn pack(idx: u32, flag: FuncFlag) -> Option<FuncId> {
+    const CAP: usize = 32 - 8;
+    
+    fn pack(idx: u32, flag: layout::FuncFlag) -> Option<FuncId> {
         let func_id = idx + 1;
-        let flag = (flag.bits() as u32) << 24;
+        let flag = (flag.bits() as u32) << Self::CAP;
 
-        (func_id < (1 << 24)).then(|| FuncId(flag | func_id))
+        (func_id < (1 << Self::CAP)).then(|| FuncId(flag | func_id))
     }
 
-    fn unpack(self) -> (u32, FuncFlag) {
-        let limit = (1 << 24) - 1;
-
-        let func_id = self.0 & limit;
-        let flag = FuncFlag::from_bits_truncate((self.0 >> 24) as u8);
+    fn unpack(self) -> (u32, layout::FuncFlag) {
+        let func_id = self.0 & ((1 << Self::CAP) - 1);
+        let flag = layout::FuncFlag::from_bits_truncate((self.0 >> Self::CAP) as u8);
 
         (func_id - 1, flag)
     }

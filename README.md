@@ -72,7 +72,7 @@ Note that this may generate very large logs, which may require a lot of memory w
 You can generate filter files to keep only the functions you are interested in.
 
 ```shell
-sftrace filter -p your-program -o "$OUTDIR/sf.filter" -r $TARGET_DIR'/deps/libyour*.rlib'
+sftrace filter -p your-program -o "$OUTDIR/sf.filter" -r "<regex rule>"
 ```
 
 Specify the filter file when running the program
