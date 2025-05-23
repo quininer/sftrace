@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use std::sync::atomic::{ self, AtomicU32 };
 use crate::arch::{ Args, ReturnValue };
 use crate::layout::*;
-use crate::{ OUTPUT, FuncId };
+use crate::{ OUTPUT, FuncId, FuncFlag };
 
 
 struct Local {
@@ -54,7 +54,7 @@ impl Local {
         }
 
         let func_id = FuncId(func_id);
-        let (func_id, enable_log) = func_id.unpack();
+        let (func_id, flag) = func_id.unpack();
         
         let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
             kind, func_id, alloc_event,
@@ -65,8 +65,8 @@ impl Local {
 
                 THREAD_ID.fetch_add(1, atomic::Ordering::Relaxed)
             }),
-            args: args.filter(|_| enable_log),
-            return_value: return_value.filter(|_| enable_log),
+            args: args.filter(|_| flag.contains(FuncFlag::LOG)),
+            return_value: return_value.filter(|_| flag.contains(FuncFlag::LOG)),
         };
         cbor4ii::serde::to_writer(&mut self.line, &event).unwrap();
 

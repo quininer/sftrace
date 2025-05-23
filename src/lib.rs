@@ -125,25 +125,6 @@ fn patch_xray(
             })
             else { return };
 
-        // dbg!(buf.as_ptr(), buf.len());
-
-        // let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
-        // let section_offset: usize = xray_section.address().try_into().unwrap();
-
-        // let min_addr = layout::XRayInstrMap(entry_map)
-        //     .iter(base.0 + section_offset)
-        //     .map(|(_, addr, _, _)| addr)
-        //     .min()
-        //     .unwrap();
-        // let max_addr = layout::XRayInstrMap(entry_map)
-        //     .iter(base.0 + section_offset)
-        //     .map(|(_, addr, _, _)| addr)
-        //     .max()
-        //     .unwrap();
-        // dbg!(min_addr, max_addr);
-        // let text_addr = min_addr & !(page_size - 1);
-        // let text_len = max_addr - text_addr + 32;
-
         {
             let mut fd = fs::OpenOptions::new()
                 .create_new(true)
@@ -166,23 +147,22 @@ fn patch_xray(
         };
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
-        let section_offset: usize = xray_section.address().try_into().unwrap();
 
-        for (idx, addr, func, entry) in layout::XRayInstrMap(entry_map)
-            .iter(section_offset)
-        {            
-            let mut enable_log = false;
+        for entry in layout::XRayInstrMap(entry_map).iter(xray_section.address()) {
+            let mut flag = FuncFlag::empty();
+            
             if let Some(filter) = maybe_filter {
-                match (filter.mode(), filter.check(func as u64)) {
-                    (layout::FilterMode::MARK, Some(mark)) => enable_log = mark.log(),
+                match (filter.mode(), filter.check(entry.function())) {
+                    (layout::FilterMode::MARK, Some(mark)) if mark.log() => flag |= FuncFlag::LOG,
                     (layout::FilterMode::MARK, _) => (),
-                    (layout::FilterMode::FILTER, Some(mark)) => enable_log = mark.log(),
+                    (layout::FilterMode::FILTER, Some(mark)) if mark.log() => flag |= FuncFlag::LOG,
+                    (layout::FilterMode::FILTER, Some(_)) => (),
                     (layout::FilterMode::FILTER, None) => continue,
                     (..) => continue
                 }
             }
 
-            let func_id = FuncId::pack(idx, enable_log).unwrap();
+            let func_id = FuncId::pack(entry.id(), flag).unwrap();
             let func_id = func_id.0;
 
             let base = if cfg!(target_os = "macos") {
@@ -197,18 +177,19 @@ fn patch_xray(
             } else {
                 base.0
             };
+            let addr: usize = entry.address().try_into().unwrap();
             let addr = base + addr;
 
             // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/include/llvm/CodeGen/AsmPrinter.h#L338
             unsafe {
-                match entry.kind {
+                match entry.kind() {
                     // entry
                     0 => arch::patch_entry(addr, func_id, entry_slot),
                     // exit
                     1 => arch::patch_exit(addr, func_id, exit_slot),
                     // tail call
                     2 => arch::patch_tailcall(addr, func_id, tailcall_slot),
-                    _ => eprintln!("unsupport kind: {}", entry.kind)
+                    kind => eprintln!("unsupport kind: {}", kind)
                 }
             }
         }
@@ -229,23 +210,26 @@ extern "C" fn shutdown() {
 #[derive(Clone, Copy)]
 struct FuncId(u32);
 
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct FuncFlag: u8 {
+        const LOG   = 0b00000001;
+    }
+}
+
 impl FuncId {
-    fn pack(idx: usize, enable_log: bool) -> Option<FuncId> {
-        let func_id: u32 = idx.try_into().ok()?;
-        let func_id = func_id + 1;
-        let flag = enable_log as u32;
-        let flag = flag << 24;
+    fn pack(idx: u32, flag: FuncFlag) -> Option<FuncId> {
+        let func_id = idx + 1;
+        let flag = (flag.bits() as u32) << 24;
 
-        let limit = (1 << 24) - 1;
-
-        (func_id < limit).then(|| FuncId(flag | func_id))
+        (func_id < (1 << 24)).then(|| FuncId(flag | func_id))
     }
 
-    fn unpack(self) -> (u32, bool) {
+    fn unpack(self) -> (u32, FuncFlag) {
         let limit = (1 << 24) - 1;
 
         let func_id = self.0 & limit;
-        let flag = (self.0 >> 24) != 0;
+        let flag = FuncFlag::from_bits_truncate((self.0 >> 24) as u8);
 
         (func_id - 1, flag)
     }

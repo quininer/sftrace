@@ -63,7 +63,6 @@ impl SubCommand {
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(xray_buf.as_ref())
             .map_err(|_| anyhow::format_err!("xray_instr_map parse failed"))?;
-        let section_offset: usize = xray_section.address().try_into()?;
         let entry_map = layout::XRayInstrMap(entry_map);
 
         if let Ok(Some(build_id)) = symobj.build_id() {
@@ -83,7 +82,8 @@ impl SubCommand {
             metadata: &metadata,
             loader: &loader,
             process_id: pid,
-            section_offset, entry_map,
+            section_offset: xray_section.address(),
+            entry_map,
             stack: HashMap::new()
         };
         let mut packet = PacketWriter::default();
@@ -106,8 +106,8 @@ impl SubCommand {
                         if let Some(entry_func_id) = stack.pop() {
                             has_entry = true;
 
-                            let (_, entry_func, _) = state.entry_map.get(state.section_offset, entry_func_id as usize);
-                            let (_, exit_func, _) = state.entry_map.get(state.section_offset, event.func_id as usize);
+                            let entry_func = state.entry_map.get(state.section_offset, entry_func_id).function();
+                            let exit_func = state.entry_map.get(state.section_offset, event.func_id).function();
                             
                             if entry_func != exit_func {
                                 eprintln!("func id does not match: {:?} vs {:?}", entry_func_id, event.func_id);
@@ -152,7 +152,7 @@ struct State<'g> {
     metadata: &'g layout::Metadata,
     loader: &'g Addr2Line,
     process_id: i32,
-    section_offset: usize,
+    section_offset: u64,
     entry_map: layout::XRayInstrMap<'g>,
     stack: HashMap<u32, Vec<u32>>,
 }
@@ -324,8 +324,8 @@ impl PacketWriter {
         func_id: u32
     ) {
         let thread_uuid = self.thread_uuid(state, event);
-        let (_, func_addr, _) = state.entry_map.get(state.section_offset, func_id as usize);
-        let addr = func_addr as u64;
+        let entry = state.entry_map.get(state.section_offset, func_id);
+        let addr = entry.function();
 
         let mut packet = micromegas_perfetto::writer::new_trace_packet();
         let mut track_event = micromegas_perfetto::writer::new_track_event();

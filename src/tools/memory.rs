@@ -89,16 +89,15 @@ impl SubCommand {
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(xray_buf.as_ref())
             .map_err(|_| anyhow::format_err!("xray_instr_map parse failed"))?;
-        let section_offset: usize = xray_section.address().try_into()?;        
         let entry_map = layout::XRayInstrMap(entry_map);
 
         let mut memory_analyzer = {
             let mileston_sym = symobj.symbol_by_name(&self.milestone)
                 .context("not found milestone symbol")?;
-            let (mileston_func_id, ..) = entry_map.iter(section_offset)
-                .find(|(_, _, func_addr, _)| (*func_addr as u64) == mileston_sym.address())
+            let entry = entry_map.iter(xray_section.address())
+                .find(|entry| entry.function() == mileston_sym.address())
                 .context("not found milestone xray entry")?;
-            MemoryAnalyzer::new(mileston_func_id as u32)
+            MemoryAnalyzer::new(entry.id())
         };
 
         while !log.fill_buf()?.is_empty() {
@@ -114,7 +113,8 @@ impl SubCommand {
         let analyze_result = memory_analyzer.analyze(self, &stage_result)?;
 
         let symbol_table = SymbolTable {
-            section_offset, entry_map,
+            entry_map,
+            section_offset: xray_section.address(),
             symbol_map: symobj.symbol_map()
         };
         
@@ -173,8 +173,8 @@ impl SubCommand {
                         let last_stack = ev.stackrange.clone().last()
                             .filter(|_| show_stack)
                             .map(|stackid| memory_analyzer.stacklist[stackid])
-                            .map(|func_id| symbol_table.entry_map.get(symbol_table.section_offset, func_id as usize))
-                            .and_then(|(_, addr, _)| symbol_table.symbol_map.get(addr as u64))
+                            .map(|func_id| symbol_table.entry_map.get(symbol_table.section_offset, func_id))
+                            .and_then(|entry| symbol_table.symbol_map.get(entry.function()))
                             .map(|name| addr2line::demangle_auto(name.name().into(), None))
                             .unwrap_or_default();
                         println!("{} {}\ttid:{}\tsize:{}\t\t{}", id, kind, ev.tid, ev.size, &last_stack);
@@ -234,7 +234,7 @@ struct AnalyzeResult {
 }
 
 struct SymbolTable<'a> {
-    section_offset: usize,
+    section_offset: u64,
     entry_map: layout::XRayInstrMap<'a>,
     symbol_map: object::read::SymbolMap<object::read::SymbolMapName<'a>>
 }
@@ -489,8 +489,9 @@ impl MemoryAnalyzer {
 
             for stack_id in ev.stackrange.clone() {
                 let func_id = self.stacklist[stack_id];
-                let (_, addr, _) = symtab.entry_map.get(symtab.section_offset, func_id as usize);
-                let symname = symtab.symbol_map.get(addr as u64)
+                let entry = symtab.entry_map.get(symtab.section_offset, func_id);
+                let addr = entry.function();
+                let symname = symtab.symbol_map.get(addr)
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let symname = addr2line::demangle_auto(symname.into(), None);
@@ -513,8 +514,8 @@ impl MemoryAnalyzer {
         let push_stack = |line: &mut String, ev: &AllocEvent| {
             for stackid in ev.stackrange.clone() {
                 let func_id = self.stacklist[stackid];
-                let (_, addr, _) = symtab.entry_map.get(symtab.section_offset, func_id as usize);
-                let name = symtab.symbol_map.get(addr as u64)
+                let entry = symtab.entry_map.get(symtab.section_offset, func_id);
+                let name = symtab.symbol_map.get(entry.function())
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let name = addr2line::demangle_auto(name.into(), None);

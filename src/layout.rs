@@ -91,30 +91,58 @@ const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
 
 pub struct XRayInstrMap<'a>(pub &'a [XRayFunctionEntry]);
 
+pub struct XRayEntry<'a> {
+    idx: u32,
+    section_offset: u64,
+    entry: &'a XRayFunctionEntry
+}
+
 impl XRayInstrMap<'_> {
-    pub fn get(&self, section_offset: usize, idx: usize) -> (usize, usize, &'_ XRayFunctionEntry) {
-        const ENTRY_SIZE: usize = std::mem::size_of::<XRayFunctionEntry>();
-        
-        let entry = &self.0[idx];
-        let entry_offset = section_offset + idx * ENTRY_SIZE;
-
-        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
-        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199                
-        let address = entry_offset + entry.address.get() as usize;
-        let function = entry_offset + entry.function.get() as usize + std::mem::size_of::<usize>();
-
-        (address, function, entry)
+    #[allow(dead_code)]
+    pub fn get(&self, section_offset: u64, idx: u32) -> XRayEntry<'_> {
+        let idx2: usize = idx.try_into().unwrap();
+        XRayEntry {
+            idx, section_offset,
+            entry: &self.0[idx2]
+        }
     }
-    
-    pub fn iter(&self, section_offset: usize) -> impl Iterator<Item = (usize, usize, usize, &'_ XRayFunctionEntry)> + '_ {
+
+    pub fn iter(&self, section_offset: u64) -> impl Iterator<Item = XRayEntry<'_>> + '_ {
         self.0.iter()
             .enumerate()
             .filter(|(_, entry)| entry.version == 2)
-            .map(move |(idx, _entry)| {
-                let (address, function, entry) = self.get(section_offset, idx);
-                (idx, address, function, entry)
+            .map(move |(idx, entry)| XRayEntry {
+                idx: idx.try_into().unwrap(),
+                section_offset, entry
             })
+        
     }
+}
+
+impl XRayEntry<'_> {
+    const ENTRY_SIZE: u64 = std::mem::size_of::<XRayFunctionEntry>() as u64;
+    
+    pub fn id(&self) -> u32 {
+        self.idx
+    }
+    
+    #[allow(dead_code)]
+    pub fn kind(&self) -> u8 {
+        self.entry.kind
+    }
+
+    #[allow(dead_code)]
+    pub fn address(&self) -> u64 {
+        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
+        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199        
+        let entry_offset = self.section_offset + u64::from(self.idx) * Self::ENTRY_SIZE;
+        entry_offset + self.entry.address.get()
+    }
+
+    pub fn function(&self) -> u64 {
+        let entry_offset = self.section_offset + u64::from(self.idx) * Self::ENTRY_SIZE;
+        entry_offset + self.entry.function.get() + std::mem::size_of::<u64>() as u64
+    }    
 }
 
 #[derive(FromBytes, Immutable, KnownLayout)]
