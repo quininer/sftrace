@@ -3,5 +3,6 @@ name = "sftrace-setup"
 version = "0.1.0"
 edition = "2024"
 links = "sftrace"
+license = "MIT"
 
 [dependencies]

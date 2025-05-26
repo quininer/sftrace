@@ -113,3 +113,7 @@ and I recommend using [vizviewr](https://github.com/gaogaotiantian/viztracer)
 ```shell
 vizviewer --use_external_processor trace.pb.gz
 ```
+
+# License
+
+This project is licensed under [the MIT license](LICENSE).
