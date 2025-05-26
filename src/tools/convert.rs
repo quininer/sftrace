@@ -303,7 +303,7 @@ impl PacketWriter {
                                 line_number: line
                             });
 
-                            *entry.insert(next_name_id as u64)
+                            *entry.insert(next_loc_id as u64)
                         },
                     };
 

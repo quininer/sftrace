@@ -134,6 +134,7 @@ macro_rules! build {
     (entry: $name:ident -> $sym:expr) => {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
+            // TODO cfi
             std::arch::naked_asm!(
                 "sub rsp, 0xc8",
 
