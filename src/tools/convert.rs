@@ -213,7 +213,15 @@ impl Addr2Line {
                             .and_then(|loc| loc.file)
                             .map(|file| file.to_owned()),
                         line: frame.location.as_ref().and_then(|loc| loc.line),
-                    });
+                    })
+                    .or_else(|| Some(Frame {
+                        name: self.loader
+                            .find_symbol(addr)
+                            .map(|name| name.to_owned())
+                            .map(|name| addr2line::demangle_auto(name.into(), None).into_owned())?,
+                        file: None,
+                        line: None
+                    }));
                 entry.insert(frame).clone()
             }
         }
