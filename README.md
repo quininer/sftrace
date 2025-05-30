@@ -8,6 +8,8 @@ A simple instrumentation-based trace tool for my own analysis needs.
 
 Add `xray` compiler flag to `.cargo/config.toml`
 
+> Requires Rust nightly-2025-05-28 or later for xray support on macOS. See [PR #140790](https://github.com/rust-lang/rust/pull/140790) for details.
+
 ```toml
 rustflags = [
   "-Zinstrument-xray=always",
