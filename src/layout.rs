@@ -214,7 +214,7 @@ impl FilterMark {
     pub fn new(addr: u64, flag: FuncFlag) -> Option<FilterMark> {
         let flag = (flag.bits() as u64) << Self::CAP;
 
-        (addr < (1 << Self::CAP)).then(|| FilterMark(addr | flag))
+        (addr < (1 << Self::CAP)).then_some(FilterMark(addr | flag))
     }
 
     pub fn addr(self) -> u64 {

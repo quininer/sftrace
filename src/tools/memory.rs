@@ -80,7 +80,7 @@ impl SubCommand {
         let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
         
         let sympath = self.symbol.as_ref().unwrap_or(&metadata.shlib_path);
-        let symfd = fs::File::open(&sympath)?;
+        let symfd = fs::File::open(sympath)?;
         let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
         let symobj = object::File::parse(&*symbuf)?;
         let xray_section = symobj.section_by_name("xray_instr_map")
@@ -124,7 +124,7 @@ impl SubCommand {
                 &symbol_table,
                 &stage_result,
                 &analyze_result,
-                &path
+                path
             )?;
         }
 
@@ -133,7 +133,7 @@ impl SubCommand {
                 self.fold,
                 &stage_result,
                 &analyze_result,
-                &path
+                path
             )?;
         }
 

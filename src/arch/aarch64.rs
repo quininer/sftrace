@@ -204,7 +204,7 @@ unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const BLR_X16:            u32 = 0xD63F0200; // BLR ip0
     const LDP_X0_X30_SP_16:   u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
 
-    let trampoline = slot as u64;
+    let trampoline = slot as usize;
     let addr = ptr::null_mut::<u32>().with_addr(address);
 
     unsafe {
@@ -224,13 +224,19 @@ unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
 }
 
 pub(crate) unsafe fn patch_entry(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_sled(address, func_id, slot);
+    unsafe {
+        patch_sled(address, func_id, slot);
+    }
 }
 
 pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_sled(address, func_id, slot);
+    unsafe {
+        patch_sled(address, func_id, slot);
+    }
 }
 
 pub(crate) unsafe fn patch_tailcall(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_sled(address, func_id, slot);
+    unsafe {
+        patch_sled(address, func_id, slot);
+    }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 #[path = "../layout.rs"]
 mod layout;
 mod util;

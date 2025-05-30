@@ -74,7 +74,7 @@ impl Local {
             self.reserve(CAP);
         }
 
-        if self.buf.len() != 0 && self.buf.len() + self.line.len() > CAP {
+        if !self.buf.is_empty() && self.buf.len() + self.line.len() > CAP {
             self.flush();
         }
 

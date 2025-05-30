@@ -54,7 +54,7 @@ impl SubCommand {
         let pid = metadata.pid.try_into().context("bad pid")?;
 
         let sympath = self.symbol.as_ref().unwrap_or(&metadata.shlib_path);
-        let symfd = fs::File::open(&sympath)?;
+        let symfd = fs::File::open(sympath)?;
         let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
         let symobj = object::File::parse(&*symbuf)?;
         let xray_section = symobj.section_by_name("xray_instr_map")
@@ -65,10 +65,10 @@ impl SubCommand {
             .map_err(|err| anyhow::format_err!("xray_instr_map parse failed: {:?}", err))?;
         let entry_map = layout::XRayInstrMap(entry_map);
 
-        if let Ok(Some(build_id)) = symobj.build_id() {
-            if metadata.shlibid != build_id {
-                anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
-            }
+        if let Ok(Some(build_id)) = symobj.build_id()
+            && metadata.shlibid != build_id
+        {
+            anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
         }
 
         let loader = addr2line::Loader::new(sympath)
@@ -276,7 +276,7 @@ impl PacketWriter {
         -> (Option<u64>, Option<u64>)
     {
         match self.addrmap.entry(addr) {
-            hash_map::Entry::Occupied(entry) => return *entry.get(),
+            hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => {
                 let Some(frame) = global_state.loader.lookup(addr)
                     else {
@@ -320,7 +320,7 @@ impl PacketWriter {
                     None
                 };
 
-                entry.insert((Some(name_id), loc_id)).clone()
+                *entry.insert((Some(name_id), loc_id))
             }
         }
     }
@@ -439,6 +439,7 @@ impl PacketWriter {
     }
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn to_debug_anno(name: &str, data: &ArgsData) -> DebugAnnotation {
     let mut anno = DebugAnnotation::default();
     anno.name_field = Some(debug_annotation::NameField::Name(name.into()));

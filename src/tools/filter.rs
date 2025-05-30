@@ -54,12 +54,12 @@ impl SubCommand {
         for sym in symmap.symbols() {
             let mut hint = false;
 
-            if listmap.contains(sym.name()) {
+            if listmap.contains(sym.name())
+                || maybe_regex.as_ref()
+                .filter(|re| re.is_match(sym.name()))
+                .is_some()
+            {
                 hint = true;
-            } else if let Some(re) = maybe_regex.as_ref() {
-                if re.is_match(sym.name()) {
-                    hint = true;
-                }
             }
 
             if hint {

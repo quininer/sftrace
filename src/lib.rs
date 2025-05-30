@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 mod util;
 mod layout;
 mod events;
@@ -93,11 +95,11 @@ fn patch_xray(
         let Ok(buf) = xray_section.uncompressed_data()
             else { return };
 
-        if let Ok(Some(build_id)) = obj.build_id() {
-            if shlibid != build_id {
-                eprintln!("build id does not match: {:?} vs {:?}", shlibid, build_id);
-                return;
-            }
+        if let Ok(Some(build_id)) = obj.build_id()
+            && shlibid != build_id
+        {
+            eprintln!("build id does not match: {:?} vs {:?}", shlibid, build_id);
+            return;
         }
 
         let mut maybe_filter_buf = None;
@@ -106,17 +108,13 @@ fn patch_xray(
             let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
             maybe_filter_buf = Some(buf);
         }
-        let maybe_filter = if let Some(buf) = maybe_filter_buf.as_ref() {
-            Some(layout::FilterMap::parse(&buf, obj.build_id().ok().flatten()).unwrap())
-        } else {
-            None
-        };
+        let maybe_filter = maybe_filter_buf.as_ref()
+            .map(|buf| layout::FilterMap::parse(buf, obj.build_id().ok().flatten()).unwrap());
 
         let Some((text_addr, text_len)) = shlib.segments()
             .filter(|seg| seg.is_code() && seg.len() != 0)
             .map(|seg| (seg.actual_virtual_memory_address(shlib), seg.len()))
-            .filter(|(addr, len)| (addr.0..addr.0 + len).contains(&(entry_slot as usize)))
-            .next()
+            .find(|(addr, len)| (addr.0..addr.0 + len).contains(&(entry_slot as usize)))
             .map(|(text_addr, text_len)| {
                 let addr = text_addr.0 & !(page_size - 1);
                 let len = text_addr.0 + text_len - addr;
@@ -139,7 +137,7 @@ fn patch_xray(
             };
             fd.write_all(layout::SIGN_TRACE).unwrap();
             cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
-            OUTPUT.set(fd).ok().expect("already initialized");
+            OUTPUT.set(fd).expect("already initialized");
         }
 
         let _guard = unsafe {
@@ -226,7 +224,7 @@ impl FuncId {
         let func_id = idx + 1;
         let flag = (flag.bits() as u32) << Self::CAP;
 
-        (func_id < (1 << Self::CAP)).then(|| FuncId(flag | func_id))
+        (func_id < (1 << Self::CAP)).then_some(FuncId(flag | func_id))
     }
 
     fn unpack(self) -> (u32, layout::FuncFlag) {
