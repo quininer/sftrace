@@ -10,7 +10,7 @@ use object::{ Object, ObjectSection };
 use util::{ MProtect, page_size };
 
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sftrace_setup(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
@@ -27,7 +27,7 @@ pub extern "C" fn sftrace_setup(
     ));
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sftrace_alloc_event(
     kind: u8,
     size: usize,
