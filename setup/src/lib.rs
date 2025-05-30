@@ -56,18 +56,8 @@ macro_rules! build_slot {
         )*
     };
     ( @ $name:ident ) => {
-        #[unsafe(naked)]
         unsafe extern "C" fn $name() {
-            // ret + nop * 6
-            std::arch::naked_asm!(
-                "ret",
-                "nop",
-                "nop",
-                "nop",
-                "nop",
-                "nop",
-                "nop",
-            );
+            // empty
         }
     };
 }

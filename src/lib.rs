@@ -43,7 +43,7 @@ fn init(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
-) {
+) { 
     patch_xray(
         entry_slot,
         exit_slot,
@@ -147,6 +147,15 @@ fn patch_xray(
         };
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
+        let (entry_slot, exit_slot, tailcall_slot) = if cfg!(target_arch = "aarch64") {
+            (
+                arch::xray_entry as _,
+                arch::xray_exit as _,
+                arch::xray_tailcall as _
+            )
+        } else {
+            (entry_slot, exit_slot, tailcall_slot)
+        };
 
         for entry in layout::XRayInstrMap(entry_map).iter(xray_section.address()) {
             let mut flag = layout::FuncFlag::empty();
@@ -193,6 +202,7 @@ fn patch_xray(
             }
         }
 
+        #[cfg(not(target_arch = "aarch64"))]
         unsafe {
             arch::patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
             arch::patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);

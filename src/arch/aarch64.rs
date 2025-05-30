@@ -93,6 +93,8 @@ macro_rules! build {
         pub unsafe extern "C" fn $name() {
             // TODO cfi
             std::arch::naked_asm!(
+                "add x30, x30, #12",
+                
                 helper!(save args),
 
                 "mov w0, w17",
@@ -115,6 +117,8 @@ macro_rules! build {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             std::arch::naked_asm!(
+                "add x30, x30, #12",
+
                 // caller-saved
                 //
                 // This is used to handle the case where
@@ -147,13 +151,13 @@ macro_rules! build {
                 sym $sym,
             );
         }
-        
-        // build!(entry: $name -> $sym);
     };
     (tailcall: $name:ident -> $sym:expr) => {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             std::arch::naked_asm!(
+                "add x30, x30, #12",
+
                 // caller-saved
                 //
                 // This is used to handle the case where
@@ -192,51 +196,23 @@ build!(entry   : xray_entry     -> events::record_entry);
 build!(exit    : xray_exit      -> events::record_exit);
 build!(tailcall: xray_tailcall  -> events::record_tailcall);
 
-pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
-    const LDR_X16_8:  u32 = 0x58000050; // LDR ip0 #8
-    const BR_X16:     u32 = 0xD61F0200; // BR ip0
-
-    let addr = slot.cast::<u32>();
-
-    addr.add(1).write(BR_X16);
-    addr.add(2).cast::<u64>().write(target as u64);
-    AtomicU32::from_ptr(addr)
-        .store(LDR_X16_8, atomic::Ordering::Release);
-}
-
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_AArch64.cpp#L33
 unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const STP_X0_X30_SP_M16E: u32 = 0xA9BF7BE0; // STP X0, X30, [SP, #-16]!
     const LDR_W17_12:         u32 = 0x18000071; // LDR w17, #12
-    const BL_0:               u32 = 0x94000000; // BL #0
-    const B_16:               u32 = 0x14000004; // B #16
+    const LDR_X16_12:         u32 = 0x58000070; // LDR x16, #12
+    const BLR_X16:            u32 = 0xD63F0200; // BLR ip0
     const LDP_X0_X30_SP_16:   u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
 
-    fn sign_extend26(data: u32) -> u32 {
-        let n = 32 - 26;
-        
-        (data << n) >> n
-    }
-
-    let trampoline = slot as usize;
-
-    let offset = (trampoline as isize) - (address + 8) as isize;
-    let offset: i32 = offset.try_into().unwrap();
-    let offset = offset >> 2; // div 4
-
-    if offset.abs() > 1 << 25 {
-        panic!("offset greater than +/-128M: {:x}", offset);
-    }
-
-    let bl_offset = BL_0 | sign_extend26(offset as u32);
-
+    let trampoline = slot as u64;
     let addr = ptr::null_mut::<u32>().with_addr(address);
 
     unsafe {
         addr.add(1).write(LDR_W17_12);
-        addr.add(2).write(bl_offset);
-        addr.add(3).write(B_16);
+        addr.add(2).write(LDR_X16_12);
+        addr.add(3).write(BLR_X16);
         addr.add(4).write(idx);
+        addr.add(5).cast::<u64>().write(trampoline as u64);
         addr.add(7).write(LDP_X0_X30_SP_16);
         AtomicU32::from_ptr(addr.cast())
             .store(STP_X0_X30_SP_M16E, atomic::Ordering::Release);
