@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2024"
 links = "sftrace"
 license = "MIT"
-
-[dependencies]
+repository = "https://github.com/quininer/sftrace"
+homepage = "https://github.com/quininer/sftrace"
+documentation = "https://docs.rs/sftrace-setup"
+description = "Setup helper for sftrace (instrumentation-based trace tool)"
+categories = [ "development-tools::debugging", "development-tools::profiling" ]
+keywords = [ "tracing", "xray" ]
