@@ -124,14 +124,39 @@ fn patch_xray(
             else { return };
 
         {
-            let mut fd = fs::OpenOptions::new()
-                .create_new(true)
-                .append(true)
-                .open(&outfile)
-                .expect("open output file failed");
+            use std::io;
+            use std::path::PathBuf;
+
+            let pid = std::process::id();
+
+            let mut path = PathBuf::from(outfile.clone());
+            let mut use_pid = false;
+            
+            let mut fd = loop {
+                match fs::OpenOptions::new()
+                    .create_new(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    Ok(fd) => break fd,
+                    Err(ref err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                        path = if use_pid {
+                            use_pid = false;
+                            path.with_extension(pid.to_string())
+                        } else {
+                            use std::hash::BuildHasher;
+                            use std::collections::hash_map::RandomState;
+
+                            let rand = RandomState::new().hash_one(0x42);
+
+                            path.with_extension(rand.to_string())
+                        };
+                    },
+                    Err(err) => panic!("open output file failed: {:?}", err)
+                }
+            };
             let metadata = layout::Metadata {
-                shlibid,
-                pid: std::process::id(),
+                shlibid, pid,
                 shlib_base: base.0 as u64,
                 shlib_path: shlib.name().into()
             };
