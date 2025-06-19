@@ -27,6 +27,7 @@ rayon = "1"
 siphasher = "1"
 indexmap = "2"
 plotly = { version = "0.12", features = [ "plotly_embed_js" ] }
+directories = "6"
 
 # xray patch
 libc = "0.2"
