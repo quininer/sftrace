@@ -4,14 +4,6 @@ pub fn page_size() -> usize {
     }
 }
 
-pub struct ScopeGuard<T, F: Fn(&mut T)>(pub T, pub F);
-
-impl<T, F: Fn(&mut T)> Drop for ScopeGuard<T, F> {
-    fn drop(&mut self) {
-        (self.1)(&mut self.0);
-    }
-}
-
 pub fn u64_is_zero(n: &u64) -> bool {
     *n == 0
 }

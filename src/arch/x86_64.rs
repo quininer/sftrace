@@ -209,9 +209,11 @@ build!(entry: xray_tailcall  -> events::record_tailcall);
 pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
     const JMP_QPTR_RIP1: u64 = 0xcc0000000125ff3e;
 
-    slot.byte_add(8).cast::<u64>().write(target as u64);
-    AtomicU64::from_ptr(slot.cast())
-        .store(JMP_QPTR_RIP1, atomic::Ordering::Release);
+    unsafe {
+        slot.byte_add(8).cast::<u64>().write(target as u64);
+        AtomicU64::from_ptr(slot.cast())
+            .store(JMP_QPTR_RIP1, atomic::Ordering::Release);
+    }
 }
 
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L123
@@ -257,5 +259,7 @@ pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe exter
 
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_x86_64.cpp#L224
 pub(crate) unsafe fn patch_tailcall(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
-    patch_entry(address, func_id, slot);
+    unsafe {
+        patch_entry(address, func_id, slot);
+    }
 }
