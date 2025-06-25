@@ -61,7 +61,7 @@ impl SubCommand {
             cmd.env("SFTRACE_FILTER", path);
         }
 
-        if env::var_os(LIBRARY_PATH_NAME).is_none() {
+        if env::var_os("LIBRARY_PATH_NAME").is_none() {
             let solib = self.solib.clone()
                 .or_else(|| Some(projdir.data_dir().join(sftracelib())))
                 .filter(|path| path.is_file())
@@ -70,7 +70,7 @@ impl SubCommand {
                 .with_context(|| format!("not found `{}`", sftracelib()))?;
 
             let libdir = solib.parent().unwrap();
-            cmd.env(LIBRARY_PATH_NAME, libdir);
+            cmd.env("LIBRARY_PATH_NAME", libdir);
         }
 
         Err(cmd.exec())?
