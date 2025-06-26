@@ -62,6 +62,9 @@ impl SubCommand {
         #[cfg(target_os = "linux")]
         const LIBRARY_PATH_NAME: &str = "LD_LIBRARY_PATH";
 
+        #[cfg(target_os = "macos")]
+        const LIBRARY_PATH_NAME: &str = "DYLD_LIBRARY_PATH";
+
         let cwd = env::current_dir()?;
         let projdir = directories::ProjectDirs::from("", "", "sftrace")
             .context("not found project dir")?;        
