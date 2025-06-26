@@ -28,7 +28,11 @@ pub struct SubCommand {
 
     /// try print solib path and exit
     #[argh(switch)]
-    print_solib: bool
+    print_solib: bool,
+
+    /// print solib install path and exit
+    #[argh(switch)]
+    print_solib_install_dir: bool,
 }
 
 fn sftracelib() -> String {
@@ -67,14 +71,23 @@ impl SubCommand {
 
         let cwd = env::current_dir()?;
         let projdir = directories::ProjectDirs::from("", "", "sftrace")
-            .context("not found project dir")?;        
+            .context("not found project dir")?;
 
-        if self.print_solib {
-            let path = search_sftracelib(projdir.data_dir())?;
-            print!("{}", path.display());
-            return Ok(())
+        match (self.print_solib, self.print_solib_install_dir) {
+            (true, true) => anyhow::bail!("--print can only have one argument"),
+            (true, _) => {
+                let path = search_sftracelib(projdir.data_dir())?;
+                print!("{}", path.display());
+                return Ok(());
+            },
+            (_, true) => {
+                let path = projdir.data_dir();
+                print!("{}", path.display());
+                return Ok(())
+            },
+            (..) => ()
         }
-        
+
         let mut iter = self.cmd.iter();
         let exe = iter.next().context("need command")?;
 
