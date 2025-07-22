@@ -33,7 +33,7 @@ pub extern "C" fn sftrace_setup(
         tailcall_slot
     ));
 
-    if let Ok(key) = std::env::var("SETUP_THREAD_ONLY") && !key.is_empty() {
+    if let Ok(key) = std::env::var("SFTRACE_SETUP_THREAD_ONLY") && !key.is_empty() {
         SETUP_THREAD_ONLY.store(true, atomic::Ordering::Relaxed);
     }
     SETUP_THREAD.with(|cell| cell.set(true));
