@@ -106,7 +106,7 @@ impl SubCommand {
         if env::var_os(LIBRARY_PATH_NAME).is_none() {
             let solib = match self.solib.as_ref() {
                 Some(p) => p.clone(),
-                None => search_sftracelib(&projdir.data_dir())?
+                None => search_sftracelib(projdir.data_dir())?
             };
 
             let libdir = solib.parent().unwrap();

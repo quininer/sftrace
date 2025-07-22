@@ -14,7 +14,7 @@ use util::{ MProtect, page_size };
 
 pub(crate) static SETUP_THREAD_ONLY: AtomicBool = AtomicBool::new(false);
 thread_local! {
-    pub(crate) static SETUP_THREAD: Cell<bool> = Cell::new(false);
+    pub(crate) static SETUP_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
 #[unsafe(no_mangle)]
