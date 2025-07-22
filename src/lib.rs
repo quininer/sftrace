@@ -12,9 +12,10 @@ use std::sync::OnceLock;
 use object::{ Object, ObjectSection };
 use util::{ MProtect, page_size };
 
-pub(crate) static SETUP_THREAD_ONLY: AtomicBool = AtomicBool::new(false);
+static SETUP_THREAD_ONLY: AtomicBool = AtomicBool::new(false);
+
 thread_local! {
-    pub(crate) static SETUP_THREAD: Cell<bool> = const { Cell::new(false) };
+    static SETUP_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
 #[unsafe(no_mangle)]
@@ -36,7 +37,7 @@ pub extern "C" fn sftrace_setup(
     if let Ok(key) = std::env::var("SFTRACE_SETUP_THREAD_ONLY") && !key.is_empty() {
         SETUP_THREAD_ONLY.store(true, atomic::Ordering::Relaxed);
     }
-    SETUP_THREAD.with(|cell| cell.set(true));
+    SETUP_THREAD.set(true);
 }
 
 #[unsafe(no_mangle)]

@@ -44,7 +44,7 @@ impl Local {
         return_value: Option<&ReturnValue>,
         alloc_event: Option<&AllocEvent>,
     ) {
-        if !(SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && SETUP_THREAD.with(|cell| cell.get())) {
+        if !(SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && SETUP_THREAD.get()) {
             return;
         }
 
