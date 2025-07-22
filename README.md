@@ -123,7 +123,7 @@ You can configure sftrace using the following environment variables.
 
 ### SFTRACE_OUTPUT_FILE
 
-Specify the output file path, which defaults to standard output.
+Specify the output file path for trace logs. If not set, no events will be recorded.
 
 ### SFTRACE_FILTER
 
