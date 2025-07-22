@@ -5,12 +5,18 @@ mod layout;
 mod events;
 mod arch;
 
-use std::fs;
+use std::sync::atomic::{self, AtomicBool};
+use std::{cell::Cell, fs};
 use std::io::Write;
 use std::sync::OnceLock;
 use object::{ Object, ObjectSection };
 use util::{ MProtect, page_size };
 
+static SETUP_THREAD_ONLY: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static SETUP_THREAD: Cell<bool> = const { Cell::new(false) };
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn sftrace_setup(
@@ -27,6 +33,11 @@ pub extern "C" fn sftrace_setup(
         exit_slot,
         tailcall_slot
     ));
+
+    if let Ok(key) = std::env::var("SFTRACE_SETUP_THREAD_ONLY") && !key.is_empty() {
+        SETUP_THREAD_ONLY.store(true, atomic::Ordering::Relaxed);
+    }
+    SETUP_THREAD.set(true);
 }
 
 #[unsafe(no_mangle)]

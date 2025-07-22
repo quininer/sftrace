@@ -117,6 +117,22 @@ and I recommend using [vizviewr](https://github.com/gaogaotiantian/viztracer)
 vizviewer --use_external_processor trace.pb.gz
 ```
 
-# License
+## Environment Variables
+
+You can configure sftrace using the following environment variables.
+
+### SFTRACE_OUTPUT_FILE
+
+Specify the output file path for trace logs. If not set, no events will be recorded.
+
+### SFTRACE_FILTER
+
+Specify the filter file path, which is used to filter the events that are recorded.
+
+### SFTRACE_SETUP_THREAD_ONLY
+
+Only record events from the thread where `sftrace_setup` function was called.
+
+## License
 
 This project is licensed under [the MIT license](LICENSE).
