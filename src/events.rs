@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::sync::LazyLock;
 use std::sync::atomic::{ self, AtomicU32 };
 use crate::arch::{ Args, ReturnValue };
-use crate::layout::*;
+use crate::{layout::*, SETUP_THREAD, SETUP_THREAD_ONLY};
 use crate::{ OUTPUT, FuncId };
 
 
@@ -44,6 +44,10 @@ impl Local {
         return_value: Option<&ReturnValue>,
         alloc_event: Option<&AllocEvent>,
     ) {
+        if !(SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && SETUP_THREAD.with(|cell| cell.get())) {
+            return;
+        }
+
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
 
         const CAP: usize = 4 * 1024;
