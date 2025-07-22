@@ -44,8 +44,8 @@ impl Local {
         return_value: Option<&ReturnValue>,
         alloc_event: Option<&AllocEvent>,
     ) {
-        if !(SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && SETUP_THREAD.get()) {
-            return;
+        if SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && !SETUP_THREAD.get() {
+           return;
         }
 
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
