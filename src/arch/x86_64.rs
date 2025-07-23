@@ -1,10 +1,10 @@
 //! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.4/compiler-rt/lib/xray/xray_trampoline_x86_64.S
 
-use std::ptr;
-use std::sync::atomic::{ self, AtomicU16, AtomicU64 };
-use serde::Serialize;
 use crate::events;
-use crate::util::{ u64_is_zero, u128_is_zero };
+use crate::util::{u64_is_zero, u128_is_zero};
+use serde::Serialize;
+use std::ptr;
+use std::sync::atomic::{self, AtomicU16, AtomicU64};
 
 #[derive(Serialize)]
 #[repr(C)]
@@ -13,7 +13,7 @@ pub struct Args {
     pub r11: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
     pub r10: u64,
-    
+
     #[serde(skip_serializing_if = "u64_is_zero")]
     pub r9: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
@@ -57,7 +57,7 @@ pub struct ReturnValue {
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub xmm0: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
-    pub xmm1: u128
+    pub xmm1: u128,
 }
 
 macro_rules! helper {
@@ -72,7 +72,6 @@ macro_rules! helper {
             "movdqu xmmword ptr [rsp+0x68], xmm5\n",
             "movdqu xmmword ptr [rsp+0x58], xmm6\n",
             "movdqu xmmword ptr [rsp+0x48], xmm7\n",
-
             // args
             "mov      qword ptr [rsp+0x40],  rdi\n",
             "mov      qword ptr [rsp+0x38],  rax\n",
@@ -81,10 +80,9 @@ macro_rules! helper {
             "mov      qword ptr [rsp+0x20],  rcx\n",
             "mov      qword ptr [rsp+0x18],   r8\n",
             "mov      qword ptr [rsp+0x10],   r9\n",
-
             // caller save
             "mov      qword ptr [rsp+0x08],  r10\n",
-            "mov      qword ptr [rsp     ],  r11\n",            
+            "mov      qword ptr [rsp     ],  r11\n",
         )
     };
     (restore args) => {
@@ -98,7 +96,6 @@ macro_rules! helper {
             "movdqu xmm5, xmmword ptr [rsp+0x68]\n",
             "movdqu xmm6, xmmword ptr [rsp+0x58]\n",
             "movdqu xmm7, xmmword ptr [rsp+0x48]\n",
-
             "mov     rdi,   qword ptr [rsp+0x40]\n",
             "mov     rax,   qword ptr [rsp+0x38]\n",
             "mov     rdx,   qword ptr [rsp+0x30]\n",
@@ -106,7 +103,6 @@ macro_rules! helper {
             "mov     rcx,   qword ptr [rsp+0x20]\n",
             "mov      r8,   qword ptr [rsp+0x18]\n",
             "mov      r9,   qword ptr [rsp+0x10]\n",
-
             "mov     r10,   qword ptr [rsp+0x08]\n",
             "mov     r11,   qword ptr [rsp     ]\n",
         )
@@ -127,7 +123,7 @@ macro_rules! helper {
             "movdqu xmm0, xmmword ptr [rsp+0x10]\n",
             "movdqu xmm1, xmmword ptr [rsp+0x20]\n",
         )
-    }
+    };
 }
 
 macro_rules! build {
@@ -160,11 +156,11 @@ macro_rules! build {
                 helper!(restore args),
 
                 "add rsp, 0xc8",
-        
+
                 "ret",
                 sym $sym,
             );
-        }        
+        }
     };
     (exit: $name:ident -> $sym:expr) => {
         #[unsafe(naked)]
@@ -192,9 +188,9 @@ macro_rules! build {
                 "pop rsp",
 
                 helper!(restore return),
-        
+
                 "add rsp, 0x30",
-        
+
                 "ret",
                 sym $sym,
             );
@@ -211,8 +207,7 @@ pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
 
     unsafe {
         slot.byte_add(8).cast::<u64>().write(target as u64);
-        AtomicU64::from_ptr(slot.cast())
-            .store(JMP_QPTR_RIP1, atomic::Ordering::Release);
+        AtomicU64::from_ptr(slot.cast()).store(JMP_QPTR_RIP1, atomic::Ordering::Release);
     }
 }
 
@@ -220,7 +215,7 @@ pub(crate) unsafe fn patch_slot(slot: *mut u8, target: usize) {
 pub(crate) unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const CALL_OP_CODE: u8 = 0xe8;
     const MOV_R10_SEQ: u16 = 0xba41;
-    
+
     let trampoline = slot as usize;
 
     let offset = (trampoline as isize) - (address + 11) as isize;
@@ -232,15 +227,14 @@ pub(crate) unsafe fn patch_entry(address: usize, idx: u32, slot: unsafe extern "
         addr.byte_add(2).cast::<u32>().write(idx);
         addr.byte_add(6).write(CALL_OP_CODE);
         addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
+        AtomicU16::from_ptr(addr.cast()).store(MOV_R10_SEQ, atomic::Ordering::Release);
     }
 }
 
 pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe extern "C" fn()) {
     const JMP_OP_CODE: u8 = 0xe9;
     const MOV_R10_SEQ: u16 = 0xba41;
-    
+
     let trampoline = slot as usize;
 
     let offset = (trampoline as isize) - (address + 11) as isize;
@@ -252,8 +246,7 @@ pub(crate) unsafe fn patch_exit(address: usize, func_id: u32, slot: unsafe exter
         addr.byte_add(2).cast::<u32>().write(func_id);
         addr.byte_add(6).write(JMP_OP_CODE);
         addr.byte_add(7).cast::<i32>().write(offset);
-        AtomicU16::from_ptr(addr.cast())
-            .store(MOV_R10_SEQ, atomic::Ordering::Release);
+        AtomicU16::from_ptr(addr.cast()).store(MOV_R10_SEQ, atomic::Ordering::Release);
     }
 }
 

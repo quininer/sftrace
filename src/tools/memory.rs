@@ -1,16 +1,16 @@
-use std::fs;
-use std::ops::Range;
-use std::io::{ self, BufRead, Read, Write };
-use std::path::{ Path, PathBuf };
-use std::collections::HashMap;
-use std::time::Duration;
-use argh::FromArgs;
+use crate::layout;
 use anyhow::Context;
+use argh::FromArgs;
 use indexmap::IndexMap;
-use zerocopy::FromBytes;
 use object::{Object, ObjectSection, ObjectSymbol};
 use serde::de::IgnoredAny;
-use crate::layout;
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, BufRead, Read, Write};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use zerocopy::FromBytes;
 
 /// Memory Analyze command
 #[derive(FromArgs, PartialEq, Debug)]
@@ -46,7 +46,7 @@ pub struct SubCommand {
 
     /// select stage (flamegraph)
     #[argh(option)]
-    select: Option<String>
+    select: Option<String>,
 }
 
 macro_rules! try_ {
@@ -78,12 +78,13 @@ impl SubCommand {
         }
 
         let metadata: layout::Metadata = cbor4ii::serde::from_reader(&mut log)?;
-        
+
         let sympath = self.symbol.as_ref().unwrap_or(&metadata.shlib_path);
         let symfd = fs::File::open(sympath)?;
         let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
         let symobj = object::File::parse(&*symbuf)?;
-        let xray_section = symobj.section_by_name("xray_instr_map")
+        let xray_section = symobj
+            .section_by_name("xray_instr_map")
             .context("not found xray_instr_map section")?;
         let xray_buf = xray_section.uncompressed_data()?;
 
@@ -92,9 +93,11 @@ impl SubCommand {
         let entry_map = layout::XRayInstrMap(entry_map);
 
         let mut memory_analyzer = {
-            let mileston_sym = symobj.symbol_by_name(&self.milestone)
+            let mileston_sym = symobj
+                .symbol_by_name(&self.milestone)
                 .context("not found milestone symbol")?;
-            let entry = entry_map.iter(xray_section.address())
+            let entry = entry_map
+                .iter(xray_section.address())
                 .find(|entry| entry.function() == mileston_sym.address())
                 .context("not found milestone xray entry")?;
             MemoryAnalyzer::new(entry.id())
@@ -115,26 +118,20 @@ impl SubCommand {
         let symbol_table = SymbolTable {
             entry_map,
             section_offset: xray_section.address(),
-            symbol_map: symobj.symbol_map()
+            symbol_map: symobj.symbol_map(),
         };
-        
 
         if let Some(path) = self.flamegraph.as_ref() {
             memory_analyzer.write_flamegraph(
                 &symbol_table,
                 &stage_result,
                 &analyze_result,
-                path
+                path,
             )?;
         }
 
         if let Some(path) = self.plot.as_ref() {
-            memory_analyzer.write_plot(
-                self.fold,
-                &stage_result,
-                &analyze_result,
-                path
-            )?;
+            memory_analyzer.write_plot(self.fold, &stage_result, &analyze_result, path)?;
         }
 
         if !self.interactive {
@@ -146,17 +143,16 @@ impl SubCommand {
 
         loop {
             println!();
-            
+
             line.clear();
             stdin.read_line(&mut line)?;
 
             if line.is_empty() {
-                break
+                break;
             }
 
             let mut iter = line.split_ascii_whitespace();
-            let Some(cmd) = iter.next()
-                else { continue };
+            let Some(cmd) = iter.next() else { continue };
 
             match cmd {
                 "exit" => break,
@@ -189,18 +185,18 @@ impl SubCommand {
                     memory_analyzer.print_event(&symbol_table, event_id, no_stack)?;
                     Ok(())
                 },
-                "stage-memory" => try_!{
+                "stage-memory" => try_! {
                     for (stage_idx, stage) in analyze_result.list.iter().enumerate() {
                         println!("{}:\t{:?}", stage_idx, stage.last());
                     }
 
                     Ok(())
                 },
-                _ => ()
+                _ => (),
             }
         }
 
-        Ok(())        
+        Ok(())
     }
 }
 
@@ -224,7 +220,7 @@ struct AllocEvent {
 
 #[derive(Default)]
 struct StageResult {
-    list: Vec<Vec<usize>>
+    list: Vec<Vec<usize>>,
 }
 
 struct AnalyzeResult {
@@ -236,7 +232,7 @@ struct AnalyzeResult {
 struct SymbolTable<'a> {
     section_offset: u64,
     entry_map: layout::XRayInstrMap<'a>,
-    symbol_map: object::read::SymbolMap<object::read::SymbolMapName<'a>>
+    symbol_map: object::read::SymbolMap<object::read::SymbolMapName<'a>>,
 }
 
 impl MemoryAnalyzer {
@@ -246,33 +242,39 @@ impl MemoryAnalyzer {
             milestones: Vec::new(),
             threads: Default::default(),
             stacklist: Default::default(),
-            alloc_event: Default::default()
+            alloc_event: Default::default(),
         }
     }
-    
-    fn eat(&mut self, event: &layout::Event<IgnoredAny, IgnoredAny, layout::AllocEvent>)
-        -> anyhow::Result<()>
-    {
+
+    fn eat(
+        &mut self,
+        event: &layout::Event<IgnoredAny, IgnoredAny, layout::AllocEvent>,
+    ) -> anyhow::Result<()> {
         match event.kind {
             layout::Kind::ENTRY => {
-                self.threads.entry(event.tid).or_default().push(event.func_id);
+                self.threads
+                    .entry(event.tid)
+                    .or_default()
+                    .push(event.func_id);
                 if event.func_id == self.milestone_func_id {
                     self.milestones.push(event.time);
                 }
-            },
+            }
             layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                 self.threads.entry(event.tid).or_default().pop();
-            },
+            }
             layout::Kind::ALLOC
             | layout::Kind::DEALLOC
             | layout::Kind::REALLOC_ALLOC
             | layout::Kind::REALLOC_DEALLOC => {
                 let alloc_event = event.alloc_event.as_ref().unwrap();
-                
-                let stack = self.threads.get(&event.tid)
+
+                let stack = self
+                    .threads
+                    .get(&event.tid)
                     .map(|stack| stack.as_slice())
                     .unwrap_or_default();
-                
+
                 let stackrange = if self.stacklist.ends_with(stack) {
                     let start = self.stacklist.len() - stack.len();
                     let end = self.stacklist.len();
@@ -285,26 +287,30 @@ impl MemoryAnalyzer {
                 };
 
                 match event.kind {
-                    layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => self.alloc_event.push(AllocEvent {
-                        kind: event.kind,
-                        tid: event.tid,
-                        time: event.time,
-                        ptr: alloc_event.ptr,
-                        size: alloc_event.size,
-                        stackrange
-                    }),
-                    layout::Kind::DEALLOC |layout::Kind::REALLOC_DEALLOC => self.alloc_event.push(AllocEvent {
-                        kind: event.kind,
-                        tid: event.tid,
-                        time: event.time,
-                        ptr: alloc_event.ptr,
-                        size: alloc_event.size,
-                        stackrange
-                    }),
-                    _ => unreachable!()
+                    layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => {
+                        self.alloc_event.push(AllocEvent {
+                            kind: event.kind,
+                            tid: event.tid,
+                            time: event.time,
+                            ptr: alloc_event.ptr,
+                            size: alloc_event.size,
+                            stackrange,
+                        })
+                    }
+                    layout::Kind::DEALLOC | layout::Kind::REALLOC_DEALLOC => {
+                        self.alloc_event.push(AllocEvent {
+                            kind: event.kind,
+                            tid: event.tid,
+                            time: event.time,
+                            ptr: alloc_event.ptr,
+                            size: alloc_event.size,
+                            stackrange,
+                        })
+                    }
+                    _ => unreachable!(),
                 }
-            },
-            _ => unreachable!()
+            }
+            _ => unreachable!(),
         }
 
         Ok(())
@@ -312,7 +318,7 @@ impl MemoryAnalyzer {
 
     fn split_and_cut(&mut self) -> StageResult {
         use rayon::prelude::*;
-        
+
         self.threads = HashMap::new();
 
         self.milestones.sort_by_key(|&t| std::cmp::Reverse(t));
@@ -349,15 +355,15 @@ impl MemoryAnalyzer {
 
                     match ev.kind {
                         layout::Kind::ALLOC | layout::Kind::REALLOC_ALLOC => {
-                            if let Some(oldidx) = ptrmap.insert(ev.ptr, idx)
-                                .filter(|_| stage != last_stage)
+                            if let Some(oldidx) =
+                                ptrmap.insert(ev.ptr, idx).filter(|_| stage != last_stage)
                             {
                                 println!(
                                     "[split/{}] bad alloc: ({}, {}) {:p}",
                                     stage, oldidx, idx, ev.ptr as *const u8
                                 );
                             }
-                        },
+                        }
                         layout::Kind::DEALLOC | layout::Kind::REALLOC_DEALLOC => {
                             if let Some(oldidx) = ptrmap.swap_remove(&ev.ptr) {
                                 let oldev = &self.alloc_event[oldidx];
@@ -369,8 +375,8 @@ impl MemoryAnalyzer {
                             } else {
                                 keep.push(idx);
                             }
-                        },
-                        _ => unreachable!()
+                        }
+                        _ => unreachable!(),
                     }
                 }
 
@@ -403,7 +409,7 @@ impl MemoryAnalyzer {
 
         for (stage_idx, stage) in result.list.iter().enumerate() {
             let mut current = Vec::with_capacity(stage.len());
-            
+
             for &idx in stage {
                 let ev = &self.alloc_event[idx];
 
@@ -417,7 +423,7 @@ impl MemoryAnalyzer {
                         }
 
                         heap_count += ev.size;
-                    },
+                    }
                     layout::Kind::DEALLOC | layout::Kind::REALLOC_DEALLOC => {
                         if ptrmap.swap_remove(&ev.ptr).is_none() {
                             println!(
@@ -427,8 +433,8 @@ impl MemoryAnalyzer {
                         };
 
                         heap_count -= ev.size;
-                    },
-                    _ => unreachable!()
+                    }
+                    _ => unreachable!(),
                 }
 
                 current.push(heap_count);
@@ -452,7 +458,7 @@ impl MemoryAnalyzer {
         use rayon::prelude::*;
 
         let ptr = self.alloc_event[event_id].ptr;
-        
+
         let mut list = (0..self.alloc_event.len())
             .step_by(1024)
             .par_bridge()
@@ -471,16 +477,24 @@ impl MemoryAnalyzer {
         list
     }
 
-    fn print_event(&self, symtab: &SymbolTable<'_>, event_id: usize, no_stack: bool)
-        -> anyhow::Result<()>
-    {
-        let ev = self.alloc_event
+    fn print_event(
+        &self,
+        symtab: &SymbolTable<'_>,
+        event_id: usize,
+        no_stack: bool,
+    ) -> anyhow::Result<()> {
+        let ev = self
+            .alloc_event
             .get(event_id)
             .context("not found event id")?;
 
         println!("kind: {}", kind_to_str(ev.kind));
         println!("tid: {}", ev.tid);
-        println!("time: {} ({:?})", ev.time, Duration::from_nanos(ev.time as _));
+        println!(
+            "time: {} ({:?})",
+            ev.time,
+            Duration::from_nanos(ev.time as _)
+        );
         println!("ptr: {:p}", ev.ptr as *const u8);
         println!("size: {}", ev.size);
 
@@ -491,15 +505,17 @@ impl MemoryAnalyzer {
                 let func_id = self.stacklist[stack_id];
                 let entry = symtab.entry_map.get(symtab.section_offset, func_id);
                 let addr = entry.function();
-                let symname = symtab.symbol_map.get(addr)
+                let symname = symtab
+                    .symbol_map
+                    .get(addr)
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let symname = addr2line::demangle_auto(symname.into(), None);
                 println!("{:p} {}", addr as *const u8, symname);
             }
         }
-        
-        Ok(())        
+
+        Ok(())
     }
 
     fn write_flamegraph(
@@ -507,7 +523,7 @@ impl MemoryAnalyzer {
         symtab: &SymbolTable,
         stage_result: &StageResult,
         analyze_result: &AnalyzeResult,
-        path: &Path
+        path: &Path,
     ) -> anyhow::Result<()> {
         use std::fmt::Write as _;
 
@@ -515,7 +531,9 @@ impl MemoryAnalyzer {
             for stackid in ev.stackrange.clone() {
                 let func_id = self.stacklist[stackid];
                 let entry = symtab.entry_map.get(symtab.section_offset, func_id);
-                let name = symtab.symbol_map.get(entry.function())
+                let name = symtab
+                    .symbol_map
+                    .get(entry.function())
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let name = addr2line::demangle_auto(name.into(), None);
@@ -525,12 +543,12 @@ impl MemoryAnalyzer {
                 }
 
                 line.push_str(&name);
-            }            
+            }
         };
 
         if !analyze_result.selectmap.is_empty() {
             let mut line = String::new();
-            
+
             for (stage_idx, list) in &analyze_result.selectmap {
                 let path = if analyze_result.selectmap.len() == 1 {
                     format!("{}", path.display())
@@ -538,7 +556,7 @@ impl MemoryAnalyzer {
                     format!("{}.{}", path.display(), stage_idx)
                 };
                 let mut writer = fs::File::create(path)?;
-                
+
                 for &idx in list {
                     let ev = &self.alloc_event[idx];
                     push_stack(&mut line, ev);
@@ -550,14 +568,24 @@ impl MemoryAnalyzer {
         } else {
             let mut writer = fs::File::create(path)?;
             let mut line = String::new();
-            
+
             for &idx in analyze_result.leakmap.values() {
-                if Some(idx) < stage_result.list.first().and_then(|list| list.last()).copied()
-                    || Some(idx) > stage_result.list.last().and_then(|list| list.first()).copied()
+                if Some(idx)
+                    < stage_result
+                        .list
+                        .first()
+                        .and_then(|list| list.last())
+                        .copied()
+                    || Some(idx)
+                        > stage_result
+                            .list
+                            .last()
+                            .and_then(|list| list.first())
+                            .copied()
                 {
-                    continue
+                    continue;
                 }
-            
+
                 let ev = &self.alloc_event[idx];
                 push_stack(&mut line, ev);
                 writeln!(line, " {}", ev.size)?;
@@ -574,11 +602,9 @@ impl MemoryAnalyzer {
         fold: bool,
         stage_result: &StageResult,
         analyze_result: &AnalyzeResult,
-        path: &Path
-    )
-        -> anyhow::Result<()>
-    {
-        use plotly::{ Plot, Scatter };
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        use plotly::{Plot, Scatter};
 
         let mut plot = Plot::new();
 
@@ -601,7 +627,6 @@ impl MemoryAnalyzer {
                 let trace = Scatter::new(x, y).text_template("e%{x}");
                 plot.add_trace(trace);
             }
-            
         }
 
         plot.write_html(path);
@@ -615,6 +640,6 @@ fn kind_to_str(kind: layout::Kind) -> &'static str {
         layout::Kind::DEALLOC => "free",
         layout::Kind::REALLOC_ALLOC => "r/alloc",
         layout::Kind::REALLOC_DEALLOC => "r/free",
-        _ => unreachable!()
+        _ => unreachable!(),
     }
 }

@@ -1,19 +1,19 @@
-use std::{ fs, io };
-use std::io::{ BufRead, Read, Write };
-use std::path::PathBuf;
-use std::cell::RefCell;
-use std::collections::{ hash_map, HashMap, HashSet };
-use argh::FromArgs;
-use anyhow::Context;
-use zerocopy::FromBytes;
-use object::{ Object, ObjectSection };
-use prost::Message;
-use micromegas_perfetto::protos::{
-    Trace, TracePacket, EventName, SourceLocation, DebugAnnotation,
-    trace_packet, track_event, debug_annotation
-};
 use crate::layout;
 use crate::util::ArgsData;
+use anyhow::Context;
+use argh::FromArgs;
+use micromegas_perfetto::protos::{
+    DebugAnnotation, EventName, SourceLocation, Trace, TracePacket, debug_annotation, trace_packet,
+    track_event,
+};
+use object::{Object, ObjectSection};
+use prost::Message;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, hash_map};
+use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
+use std::{fs, io};
+use zerocopy::FromBytes;
 
 /// Convert command
 #[derive(FromArgs, PartialEq, Debug)]
@@ -57,7 +57,8 @@ impl SubCommand {
         let symfd = fs::File::open(sympath)?;
         let symbuf = unsafe { memmap2::Mmap::map(&symfd)? };
         let symobj = object::File::parse(&*symbuf)?;
-        let xray_section = symobj.section_by_name("xray_instr_map")
+        let xray_section = symobj
+            .section_by_name("xray_instr_map")
             .context("not found xray_instr_map section")?;
         let xray_buf = xray_section.uncompressed_data()?;
 
@@ -68,7 +69,11 @@ impl SubCommand {
         if let Ok(Some(build_id)) = symobj.build_id()
             && metadata.shlibid != build_id
         {
-            anyhow::bail!("build id does not match: {:?} vs {:?}", metadata.shlibid, build_id);
+            anyhow::bail!(
+                "build id does not match: {:?} vs {:?}",
+                metadata.shlibid,
+                build_id
+            );
         }
 
         let loader = addr2line::Loader::new(sympath)
@@ -84,7 +89,7 @@ impl SubCommand {
             process_id: pid,
             section_offset: xray_section.address(),
             entry_map,
-            stack: HashMap::new()
+            stack: HashMap::new(),
         };
         let mut packet = PacketWriter::default();
 
@@ -97,20 +102,29 @@ impl SubCommand {
                     let func_id = event.func_id;
                     state.stack.entry(event.tid).or_default().push(func_id);
                     packet.push_call(&mut state, &event, func_id);
-                },
+                }
                 layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                     let mut has_entry = false;
                     let mut is_empty = false;
 
-                    if let Some(stack) = state.stack.get_mut(&event.tid){
+                    if let Some(stack) = state.stack.get_mut(&event.tid) {
                         if let Some(entry_func_id) = stack.pop() {
                             has_entry = true;
 
-                            let entry_func = state.entry_map.get(state.section_offset, entry_func_id).function();
-                            let exit_func = state.entry_map.get(state.section_offset, event.func_id).function();
-                            
+                            let entry_func = state
+                                .entry_map
+                                .get(state.section_offset, entry_func_id)
+                                .function();
+                            let exit_func = state
+                                .entry_map
+                                .get(state.section_offset, event.func_id)
+                                .function();
+
                             if entry_func != exit_func {
-                                eprintln!("func id does not match: {:?} vs {:?}", entry_func_id, event.func_id);
+                                eprintln!(
+                                    "func id does not match: {:?} vs {:?}",
+                                    entry_func_id, event.func_id
+                                );
                             }
                         }
 
@@ -126,7 +140,7 @@ impl SubCommand {
                     }
 
                     packet.push_call(&mut state, &event, event.func_id);
-                },
+                }
                 // temp ignore
                 layout::Kind::ALLOC
                 | layout::Kind::DEALLOC
@@ -143,7 +157,7 @@ impl SubCommand {
         packet.flush_to(&mut output)?;
         output.flush()?;
 
-        Ok(())    
+        Ok(())
     }
 }
 
@@ -159,14 +173,14 @@ struct State<'g> {
 
 struct Addr2Line {
     loader: addr2line::Loader,
-    cache: RefCell<HashMap<u64, Option<Frame>>>
+    cache: RefCell<HashMap<u64, Option<Frame>>>,
 }
 
 #[derive(Clone)]
 struct Frame {
     name: String,
     file: Option<String>,
-    line: Option<u32>
+    line: Option<u32>,
 }
 
 #[derive(Default)]
@@ -182,7 +196,7 @@ impl Addr2Line {
     fn new(loader: addr2line::Loader) -> Self {
         Addr2Line {
             loader,
-            cache: RefCell::new(HashMap::new())
+            cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -192,36 +206,45 @@ impl Addr2Line {
         match cache.entry(addr) {
             hash_map::Entry::Occupied(entry) => entry.get().clone(),
             hash_map::Entry::Vacant(entry) => {
-                let frame = self.loader.find_frames(addr)
+                let frame = self
+                    .loader
+                    .find_frames(addr)
                     .ok()
                     .and_then(|mut iter| iter.next().ok())
                     .flatten()
                     .map(|frame| Frame {
-                        name: frame.function
-                            .and_then(|name| name.demangle()
-                                .map(|name| name.into_owned())
-                                .ok()
-                            )
-                            .or_else(|| self.loader
-                                .find_symbol(addr)
-                                .map(|name| name.to_owned())
-                                .map(|name| addr2line::demangle_auto(name.into(), None).into_owned())
-                            )
+                        name: frame
+                            .function
+                            .and_then(|name| name.demangle().map(|name| name.into_owned()).ok())
+                            .or_else(|| {
+                                self.loader
+                                    .find_symbol(addr)
+                                    .map(|name| name.to_owned())
+                                    .map(|name| {
+                                        addr2line::demangle_auto(name.into(), None).into_owned()
+                                    })
+                            })
                             .unwrap_or_else(|| "unknown".into()),
-                        file: frame.location
+                        file: frame
+                            .location
                             .as_ref()
                             .and_then(|loc| loc.file)
                             .map(|file| file.to_owned()),
                         line: frame.location.as_ref().and_then(|loc| loc.line),
                     })
-                    .or_else(|| Some(Frame {
-                        name: self.loader
-                            .find_symbol(addr)
-                            .map(|name| name.to_owned())
-                            .map(|name| addr2line::demangle_auto(name.into(), None).into_owned())?,
-                        file: None,
-                        line: None
-                    }));
+                    .or_else(|| {
+                        Some(Frame {
+                            name: self
+                                .loader
+                                .find_symbol(addr)
+                                .map(|name| name.to_owned())
+                                .map(|name| {
+                                    addr2line::demangle_auto(name.into(), None).into_owned()
+                                })?,
+                            file: None,
+                            line: None,
+                        })
+                    });
                 entry.insert(frame).clone()
             }
         }
@@ -231,7 +254,7 @@ impl Addr2Line {
 impl PacketWriter {
     fn process_uuid(&mut self, global_state: &State) -> u64 {
         let pid = global_state.process_id;
-        
+
         if self.trace.packet.is_empty() {
             let mut packet = micromegas_perfetto::writer::new_trace_packet();
             let mut track_desc = micromegas_perfetto::writer::new_track_descriptor(pid as u64);
@@ -242,20 +265,20 @@ impl PacketWriter {
             packet.first_packet_on_sequence = Some(true);
             packet.sequence_flags = Some(3);
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));
-            self.trace.packet.push(packet);            
+            self.trace.packet.push(packet);
         }
 
-        pid as u64        
+        pid as u64
     }
-    
+
     fn thread_uuid(
         &mut self,
         global_state: &State,
-        event: &layout::Event<ArgsData, ArgsData, layout::AllocEvent>
+        event: &layout::Event<ArgsData, ArgsData, layout::AllocEvent>,
     ) -> u64 {
         let pid = self.process_uuid(global_state);
         let tid = event.tid;
-        
+
         if !self.threads.insert(tid) {
             let mut packet = micromegas_perfetto::writer::new_trace_packet();
             let mut track_desc = micromegas_perfetto::writer::new_track_descriptor(tid as u64);
@@ -272,16 +295,18 @@ impl PacketWriter {
         tid as u64
     }
 
-    fn frame_info(&mut self, global_state: &State, packet: &mut TracePacket, addr: u64)
-        -> (Option<u64>, Option<u64>)
-    {
+    fn frame_info(
+        &mut self,
+        global_state: &State,
+        packet: &mut TracePacket,
+        addr: u64,
+    ) -> (Option<u64>, Option<u64>) {
         match self.addrmap.entry(addr) {
             hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => {
-                let Some(frame) = global_state.loader.lookup(addr)
-                    else {
-                        return *entry.insert((None, None));
-                    };
+                let Some(frame) = global_state.loader.lookup(addr) else {
+                    return *entry.insert((None, None));
+                };
 
                 let interned_data = packet.interned_data.get_or_insert_default();
 
@@ -291,11 +316,11 @@ impl PacketWriter {
                     hash_map::Entry::Vacant(entry) => {
                         interned_data.event_names.push(EventName {
                             iid: Some(next_name_id as u64),
-                            name: Some(entry.key().clone())
+                            name: Some(entry.key().clone()),
                         });
 
                         *entry.insert(next_name_id as u64)
-                    },
+                    }
                 };
 
                 let loc_id = if let Some(file) = frame.file {
@@ -308,11 +333,11 @@ impl PacketWriter {
                                 iid: Some(next_loc_id as u64),
                                 file_name: Some(file),
                                 function_name: Some(frame.name),
-                                line_number: line
+                                line_number: line,
                             });
 
                             *entry.insert(next_loc_id as u64)
-                        },
+                        }
                     };
 
                     Some(loc_id)
@@ -324,12 +349,12 @@ impl PacketWriter {
             }
         }
     }
-    
+
     fn push_call(
         &mut self,
         state: &mut State,
         event: &layout::Event<ArgsData, ArgsData, layout::AllocEvent>,
-        func_id: u32
+        func_id: u32,
     ) {
         let thread_uuid = self.thread_uuid(state, event);
         let entry = state.entry_map.get(state.section_offset, func_id);
@@ -345,23 +370,29 @@ impl PacketWriter {
                 track_event.r#type = Some(track_event::Type::SliceBegin.into());
                 let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
-                track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
-                track_event.debug_annotations = event.args.as_ref()
+                track_event.source_location_field =
+                    loc_id.map(track_event::SourceLocationField::SourceLocationIid);
+                track_event.debug_annotations = event
+                    .args
+                    .as_ref()
                     .map(|data| to_debug_anno("args", data))
                     .into_iter()
                     .collect();
-            },
+            }
             layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                 track_event.r#type = Some(track_event::Type::SliceEnd.into());
                 let (name_id, loc_id) = self.frame_info(state, &mut packet, addr);
                 track_event.name_field = name_id.map(track_event::NameField::NameIid);
-                track_event.source_location_field = loc_id.map(track_event::SourceLocationField::SourceLocationIid);
-                track_event.debug_annotations = event.return_value.as_ref()
+                track_event.source_location_field =
+                    loc_id.map(track_event::SourceLocationField::SourceLocationIid);
+                track_event.debug_annotations = event
+                    .return_value
+                    .as_ref()
                     .map(|data| to_debug_anno("return_value", data))
                     .into_iter()
                     .collect();
-            },
-            _ => unreachable!()
+            }
+            _ => unreachable!(),
         }
 
         packet.data = Some(trace_packet::Data::TrackEvent(track_event));
@@ -380,7 +411,7 @@ impl PacketWriter {
     //             println!("miss alloc event data");
     //             return
     //         };
-        
+
     //     let thread_uuid = self.thread_uuid(state, event);
 
     //     let mut packet = micromegas_perfetto::writer::new_trace_packet();
@@ -427,7 +458,7 @@ impl PacketWriter {
         if self.trace.packet.is_empty() {
             return Ok(());
         }
-        
+
         let buf = self.trace.encode_to_vec();
         writer.write_all(&buf)?;
         self.trace.packet.clear();
@@ -443,7 +474,10 @@ impl PacketWriter {
 fn to_debug_anno(name: &str, data: &ArgsData) -> DebugAnnotation {
     let mut anno = DebugAnnotation::default();
     anno.name_field = Some(debug_annotation::NameField::Name(name.into()));
-    anno.dict_entries = data.0.vec.iter()
+    anno.dict_entries = data
+        .0
+        .vec
+        .iter()
         .map(|(k, v)| {
             let v = *v;
             let mut anno = DebugAnnotation::default();
@@ -466,10 +500,10 @@ fn to_debug_anno(name: &str, data: &ArgsData) -> DebugAnnotation {
                         anno
                     };
                     anno.array_values = vec![x, y];
-                },
+                }
             }
 
-            anno            
+            anno
         })
         .collect();
     anno

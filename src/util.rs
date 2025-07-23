@@ -1,7 +1,5 @@
 pub fn page_size() -> usize {
-    unsafe {
-        libc::sysconf(libc::_SC_PAGE_SIZE) as usize
-    }
+    unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as usize }
 }
 
 pub fn u64_is_zero(n: &u64) -> bool {
@@ -15,7 +13,7 @@ pub fn u128_is_zero(n: &u128) -> bool {
 pub struct MProtect {
     flag: bool,
     addr: *mut u8,
-    size: usize
+    size: usize,
 }
 
 impl MProtect {
@@ -25,7 +23,7 @@ impl MProtect {
             libc::mprotect(
                 addr.cast(),
                 size,
-                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
             ) == 0
         };
 
@@ -39,7 +37,8 @@ impl MProtect {
 
         MProtect {
             flag: succ,
-            addr, size
+            addr,
+            size,
         }
     }
 
@@ -51,22 +50,22 @@ impl MProtect {
                 addr as _,
                 size as _,
                 0,
-                mach2::vm_prot::VM_PROT_READ | mach2::vm_prot::VM_PROT_WRITE | mach2::vm_prot::VM_PROT_COPY
+                mach2::vm_prot::VM_PROT_READ
+                    | mach2::vm_prot::VM_PROT_WRITE
+                    | mach2::vm_prot::VM_PROT_COPY,
             )
         };
         let succ = ret == mach2::kern_return::KERN_SUCCESS;
 
         if !succ {
-            eprintln!(
-                "text segment {:?} unlock failed: {:?}",
-                (addr, size), ret
-            );            
+            eprintln!("text segment {:?} unlock failed: {:?}", (addr, size), ret);
         }
 
         MProtect {
             flag: succ,
-            addr, size
-        }         
+            addr,
+            size,
+        }
     }
 }
 
@@ -78,11 +77,14 @@ impl Drop for MProtect {
                 let ret = libc::mprotect(
                     self.addr.cast(),
                     self.size,
-                    libc::PROT_READ | libc::PROT_EXEC
+                    libc::PROT_READ | libc::PROT_EXEC,
                 );
 
                 if ret != 0 {
-                    eprintln!("text segment lock failed: {:?}", std::io::Error::last_os_error());
+                    eprintln!(
+                        "text segment lock failed: {:?}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             }
 
@@ -93,7 +95,7 @@ impl Drop for MProtect {
                     self.addr as _,
                     self.size as _,
                     0,
-                    mach2::vm_prot::VM_PROT_READ | mach2::vm_prot::VM_PROT_EXECUTE
+                    mach2::vm_prot::VM_PROT_READ | mach2::vm_prot::VM_PROT_EXECUTE,
                 );
 
                 if ret != mach2::kern_return::KERN_SUCCESS {

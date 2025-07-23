@@ -4,15 +4,10 @@ unsafe extern "C" {
     fn sftrace_setup(
         entry_slot: unsafe extern "C" fn(),
         exit_slot: unsafe extern "C" fn(),
-        tailcall_slot: unsafe extern "C" fn(),        
+        tailcall_slot: unsafe extern "C" fn(),
     );
 
-    fn sftrace_alloc_event(
-        kind: u8,
-        size: usize,
-        align: usize,
-        ptr: *mut u8    
-    );    
+    fn sftrace_alloc_event(kind: u8, size: usize, align: usize, ptr: *mut u8);
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -76,13 +71,9 @@ pub unsafe fn setup() {
     }
 
     ENABLE_ALLOCATOR_HOOK.store(true, std::sync::atomic::Ordering::Relaxed);
-    
+
     unsafe {
-        sftrace_setup(
-            sftrace_entry_slot,
-            sftrace_exit_slot,
-            sftrace_tailcall_slot
-        );
+        sftrace_setup(sftrace_entry_slot, sftrace_exit_slot, sftrace_tailcall_slot);
     }
 }
 
@@ -95,7 +86,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
     #[inline]
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         let enable = ENABLE_ALLOCATOR_HOOK.load(std::sync::atomic::Ordering::Relaxed);
-        
+
         unsafe {
             let v = std::alloc::System.alloc(layout);
             if enable {
@@ -114,7 +105,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
                 sftrace_alloc_event(2, layout.size(), layout.align(), ptr);
             }
 
-            std::alloc::System.dealloc(ptr, layout);           
+            std::alloc::System.dealloc(ptr, layout);
         }
     }
 
@@ -142,7 +133,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for SftraceAllocator<A> {
             if enable {
                 sftrace_alloc_event(3, new_size, layout.align(), v);
             }
-            v            
+            v
         }
     }
 }

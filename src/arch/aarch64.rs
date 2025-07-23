@@ -1,10 +1,10 @@
 //! https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_trampoline_AArch64.S
 
-use std::ptr;
-use std::sync::atomic::{ self, AtomicU32 };
-use serde::Serialize;
 use crate::events;
-use crate::util::{ u64_is_zero, u128_is_zero };
+use crate::util::{u64_is_zero, u128_is_zero};
+use serde::Serialize;
+use std::ptr;
+use std::sync::atomic::{self, AtomicU32};
 
 #[derive(Serialize)]
 #[repr(C)]
@@ -17,20 +17,20 @@ pub struct Args {
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub q6: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
-    pub q7: u128,    
+    pub q7: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub q4: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
-    pub q5: u128,   
+    pub q5: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub q2: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
-    pub q3: u128, 
+    pub q3: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub q0: u128,
     #[serde(skip_serializing_if = "u128_is_zero")]
     pub q1: u128,
-    
+
     #[serde(skip_serializing_if = "u64_is_zero")]
     pub x7: u64,
     #[serde(skip_serializing_if = "u64_is_zero")]
@@ -76,7 +76,7 @@ macro_rules! helper {
             "ldp x7, x30, [sp], #16\n",
             "ldp x5, x6,  [sp], #16\n",
             "ldp x3, x4,  [sp], #16\n",
-            "ldp x1, x2,  [sp], #16\n",            
+            "ldp x1, x2,  [sp], #16\n",
         )
     };
     (save return) => {
@@ -94,7 +94,7 @@ macro_rules! build {
             // TODO cfi
             std::arch::naked_asm!(
                 "add x30, x30, #12",
-                
+
                 helper!(save args),
 
                 "mov w0, w17",
@@ -107,13 +107,13 @@ macro_rules! build {
 
                 sym $sym,
             );
-        }        
+        }
     };
     (exit: $name:ident -> $sym:expr) => {
         // HACK https://github.com/llvm/llvm-project/issues/141051
-        // 
+        //
         // llvm seems to report tailcall as exit,
-        // so we also need additional backup registers for exit        
+        // so we also need additional backup registers for exit
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             std::arch::naked_asm!(
@@ -141,7 +141,7 @@ macro_rules! build {
 
                 helper!(restore args),
 
-                "ldp x15, x16, [sp], #16",                
+                "ldp x15, x16, [sp], #16",
                 "ldp x13, x14, [sp], #16",
                 "ldp x11, x12, [sp], #16",
                 "ldp x9,  x10, [sp], #16",
@@ -179,7 +179,7 @@ macro_rules! build {
 
                 helper!(restore args),
 
-                "ldp x15, x16, [sp], #16",                
+                "ldp x15, x16, [sp], #16",
                 "ldp x13, x14, [sp], #16",
                 "ldp x11, x12, [sp], #16",
                 "ldp x9,  x10, [sp], #16",
@@ -188,7 +188,7 @@ macro_rules! build {
 
                 sym $sym,
             );
-        }        
+        }
     };
 }
 
@@ -199,10 +199,10 @@ build!(tailcall: xray_tailcall  -> events::record_tailcall);
 // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.5/compiler-rt/lib/xray/xray_AArch64.cpp#L33
 unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
     const STP_X0_X30_SP_M16E: u32 = 0xA9BF7BE0; // STP X0, X30, [SP, #-16]!
-    const LDR_W17_12:         u32 = 0x18000071; // LDR w17, #12
-    const LDR_X16_12:         u32 = 0x58000070; // LDR x16, #12
-    const BLR_X16:            u32 = 0xD63F0200; // BLR ip0
-    const LDP_X0_X30_SP_16:   u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
+    const LDR_W17_12: u32 = 0x18000071; // LDR w17, #12
+    const LDR_X16_12: u32 = 0x58000070; // LDR x16, #12
+    const BLR_X16: u32 = 0xD63F0200; // BLR ip0
+    const LDP_X0_X30_SP_16: u32 = 0xA8C17BE0; // LDP X0, X30, [SP], #16
 
     let trampoline = slot as usize;
     let addr = ptr::null_mut::<u32>().with_addr(address);
@@ -214,8 +214,7 @@ unsafe fn patch_sled(address: usize, idx: u32, slot: unsafe extern "C" fn()) {
         addr.add(4).write(idx);
         addr.add(5).cast::<u64>().write(trampoline as u64);
         addr.add(7).write(LDP_X0_X30_SP_16);
-        AtomicU32::from_ptr(addr.cast())
-            .store(STP_X0_X30_SP_M16E, atomic::Ordering::Release);
+        AtomicU32::from_ptr(addr.cast()).store(STP_X0_X30_SP_M16E, atomic::Ordering::Release);
     }
 
     unsafe {

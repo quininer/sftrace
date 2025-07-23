@@ -37,4 +37,3 @@ fn main() -> anyhow::Result<()> {
         SubCommand::Record(cmd) => cmd.exec(),
     }
 }
-

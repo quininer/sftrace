@@ -1,20 +1,19 @@
+use serde::{Deserialize, Deserializer, de};
 use std::fmt;
 use std::marker::PhantomData;
-use serde::{ de, Deserialize, Deserializer };
-
 
 #[derive(Deserialize, Debug)]
-#[serde(transparent)] 
+#[serde(transparent)]
 pub struct ArgsData(pub VecMap<String, u128>);
 
 pub struct VecMap<K, V> {
-    pub vec: Vec<(K, V)>
+    pub vec: Vec<(K, V)>,
 }
 
 impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for VecMap<K, V> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: Deserializer<'de>
+        D: Deserializer<'de>,
     {
         struct Visitor<K, V>(PhantomData<(K, V)>);
 

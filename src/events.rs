@@ -1,12 +1,11 @@
-use std::io::Write;
-use std::time::Instant;
+use crate::arch::{Args, ReturnValue};
+use crate::{FuncId, OUTPUT};
+use crate::{SETUP_THREAD, SETUP_THREAD_ONLY, layout::*};
 use std::cell::RefCell;
+use std::io::Write;
 use std::sync::LazyLock;
-use std::sync::atomic::{ self, AtomicU32 };
-use crate::arch::{ Args, ReturnValue };
-use crate::{layout::*, SETUP_THREAD, SETUP_THREAD_ONLY};
-use crate::{ OUTPUT, FuncId };
-
+use std::sync::atomic::{self, AtomicU32};
+use std::time::Instant;
 
 struct Local {
     tid: Option<u32>,
@@ -14,7 +13,7 @@ struct Local {
     line: Vec<u8>,
 }
 
-thread_local!{
+thread_local! {
     static LOCAL: RefCell<Local> = const {
         RefCell::new(Local {
             tid: None,
@@ -26,7 +25,7 @@ thread_local!{
 
 impl Drop for Local {
     fn drop(&mut self) {
-        self.flush();        
+        self.flush();
     }
 }
 
@@ -45,7 +44,7 @@ impl Local {
         alloc_event: Option<&AllocEvent>,
     ) {
         if SETUP_THREAD_ONLY.load(atomic::Ordering::Relaxed) && !SETUP_THREAD.get() {
-           return;
+            return;
         }
 
         static NOW: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -54,14 +53,16 @@ impl Local {
 
         // Uninitialized, ignored
         if OUTPUT.get().is_none() {
-           return; 
+            return;
         }
 
         let func_id = FuncId(func_id);
         let (func_id, flag) = func_id.unpack();
-        
+
         let event: Event<&Args, &ReturnValue, &AllocEvent> = Event {
-            kind, func_id, alloc_event,
+            kind,
+            func_id,
+            alloc_event,
             time: dur2u64(NOW.elapsed()),
             tid: *self.tid.get_or_insert_with(|| {
                 // TODO use std::thread::Thread.id().as_u64()
@@ -120,7 +121,7 @@ pub extern "C" fn record_exit(func_id: u32, return_value: &ReturnValue) {
         if let Ok(mut local) = local.try_borrow_mut() {
             local.record(Kind::EXIT, func_id, None, Some(return_value), None);
         }
-    });    
+    });
 }
 
 pub extern "C" fn record_tailcall(func_id: u32) {
@@ -128,15 +129,10 @@ pub extern "C" fn record_tailcall(func_id: u32) {
         if let Ok(mut local) = local.try_borrow_mut() {
             local.record(Kind::TAIL_CALL, func_id, None, None, None);
         }
-    });    
+    });
 }
 
-pub fn record_alloc(
-    kind: u8,
-    size: usize,
-    align: usize,
-    ptr: *mut u8
-) {
+pub fn record_alloc(kind: u8, size: usize, align: usize, ptr: *mut u8) {
     let _ = LOCAL.try_with(|local| {
         if let Ok(mut local) = local.try_borrow_mut() {
             let kind = match kind {
@@ -144,15 +140,15 @@ pub fn record_alloc(
                 2 => Kind::DEALLOC,
                 3 => Kind::REALLOC_ALLOC,
                 4 => Kind::REALLOC_DEALLOC,
-                _ => panic!()
+                _ => panic!(),
             };
-        
+
             let event = AllocEvent {
                 size: size as u64,
                 align: align as u64,
-                ptr: ptr as usize as u64
+                ptr: ptr as usize as u64,
             };
-        
+
             local.record(kind, 0, None, None, Some(&event));
         }
     });
