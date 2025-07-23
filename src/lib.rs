@@ -1,16 +1,16 @@
 #![allow(clippy::uninlined_format_args)]
 
-mod util;
-mod layout;
-mod events;
 mod arch;
+mod events;
+mod layout;
+mod util;
 
-use std::sync::atomic::{self, AtomicBool};
-use std::{cell::Cell, fs};
+use object::{Object, ObjectSection};
 use std::io::Write;
 use std::sync::OnceLock;
-use object::{ Object, ObjectSection };
-use util::{ MProtect, page_size };
+use std::sync::atomic::{self, AtomicBool};
+use std::{cell::Cell, fs};
+use util::{MProtect, page_size};
 
 static SETUP_THREAD_ONLY: AtomicBool = AtomicBool::new(false);
 
@@ -28,25 +28,18 @@ pub extern "C" fn sftrace_setup(
 
     static ONCE: Once = Once::new();
 
-    ONCE.call_once(|| init(
-        entry_slot,
-        exit_slot,
-        tailcall_slot
-    ));
+    ONCE.call_once(|| init(entry_slot, exit_slot, tailcall_slot));
 
-    if let Ok(key) = std::env::var("SFTRACE_SETUP_THREAD_ONLY") && !key.is_empty() {
+    if let Ok(key) = std::env::var("SFTRACE_SETUP_THREAD_ONLY")
+        && !key.is_empty()
+    {
         SETUP_THREAD_ONLY.store(true, atomic::Ordering::Relaxed);
     }
     SETUP_THREAD.set(true);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sftrace_alloc_event(
-    kind: u8,
-    size: usize,
-    align: usize,
-    ptr: *mut u8    
-) {
+pub extern "C" fn sftrace_alloc_event(kind: u8, size: usize, align: usize, ptr: *mut u8) {
     events::record_alloc(kind, size, align, ptr);
 }
 
@@ -56,17 +49,13 @@ fn init(
     entry_slot: unsafe extern "C" fn(),
     exit_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
-) { 
-    patch_xray(
-        entry_slot,
-        exit_slot,
-        tailcall_slot
-    );
-    
+) {
+    patch_xray(entry_slot, exit_slot, tailcall_slot);
+
     unsafe {
         match libc::atexit(shutdown) {
             0 => (),
-            err => panic!("atexit failed: {:?}", err)
+            err => panic!("atexit failed: {:?}", err),
         }
     }
 }
@@ -76,11 +65,12 @@ fn patch_xray(
     exit_slot: unsafe extern "C" fn(),
     tailcall_slot: unsafe extern "C" fn(),
 ) {
+    use findshlibs::{Segment, SharedLibrary};
     use zerocopy::FromBytes;
-    use findshlibs::{ SharedLibrary, Segment };
 
-    let Some(outfile) = std::env::var_os("SFTRACE_OUTPUT_FILE")
-        else { return };
+    let Some(outfile) = std::env::var_os("SFTRACE_OUTPUT_FILE") else {
+        return;
+    };
 
     let page_size = page_size();
 
@@ -94,17 +84,22 @@ fn patch_xray(
         if !(base.0..base.0 + shlib.len()).contains(&(entry_slot as usize)) {
             return;
         }
-        
-        let Ok(fd) = std::fs::File::open(shlib.name())
-            else { return };
-        let Ok(buf) = (unsafe { memmap2::Mmap::map(&fd) })
-            else { return };
-        let Ok(obj) = object::File::parse(buf.as_ref())
-            else { return };
-        let Some(xray_section) = obj.section_by_name("xray_instr_map")
-            else { return };
-        let Ok(buf) = xray_section.uncompressed_data()
-            else { return };
+
+        let Ok(fd) = std::fs::File::open(shlib.name()) else {
+            return;
+        };
+        let Ok(buf) = (unsafe { memmap2::Mmap::map(&fd) }) else {
+            return;
+        };
+        let Ok(obj) = object::File::parse(buf.as_ref()) else {
+            return;
+        };
+        let Some(xray_section) = obj.section_by_name("xray_instr_map") else {
+            return;
+        };
+        let Ok(buf) = xray_section.uncompressed_data() else {
+            return;
+        };
 
         if let Ok(Some(build_id)) = obj.build_id()
             && shlibid != build_id
@@ -119,10 +114,12 @@ fn patch_xray(
             let buf = unsafe { memmap2::Mmap::map(&fd).unwrap() };
             maybe_filter_buf = Some(buf);
         }
-        let maybe_filter = maybe_filter_buf.as_ref()
+        let maybe_filter = maybe_filter_buf
+            .as_ref()
             .map(|buf| layout::FilterMap::parse(buf, obj.build_id().ok().flatten()).unwrap());
 
-        let Some((text_addr, text_len)) = shlib.segments()
+        let Some((text_addr, text_len)) = shlib
+            .segments()
             .filter(|seg| seg.is_code() && seg.len() != 0)
             .map(|seg| (seg.actual_virtual_memory_address(shlib), seg.len()))
             .find(|(addr, len)| (addr.0..addr.0 + len).contains(&(entry_slot as usize)))
@@ -132,7 +129,9 @@ fn patch_xray(
                 let len = (len + page_size - 1) & !(page_size - 1);
                 (addr, len)
             })
-            else { return };
+        else {
+            return;
+        };
 
         {
             use std::io;
@@ -142,7 +141,7 @@ fn patch_xray(
 
             let mut path = PathBuf::from(outfile.clone());
             let mut use_pid = false;
-            
+
             let mut fd = loop {
                 match fs::OpenOptions::new()
                     .create_new(true)
@@ -155,37 +154,36 @@ fn patch_xray(
                             use_pid = false;
                             path.with_extension(pid.to_string())
                         } else {
-                            use std::hash::BuildHasher;
                             use std::collections::hash_map::RandomState;
+                            use std::hash::BuildHasher;
 
                             let rand = RandomState::new().hash_one(0x42);
 
                             path.with_extension(rand.to_string())
                         };
-                    },
-                    Err(err) => panic!("open output file failed: {:?}", err)
+                    }
+                    Err(err) => panic!("open output file failed: {:?}", err),
                 }
             };
             let metadata = layout::Metadata {
-                shlibid, pid,
+                shlibid,
+                pid,
                 shlib_base: base.0 as u64,
-                shlib_path: shlib.name().into()
+                shlib_path: shlib.name().into(),
             };
             fd.write_all(layout::SIGN_TRACE).unwrap();
             cbor4ii::serde::to_writer(&mut fd, &metadata).unwrap();
             OUTPUT.set(fd).expect("already initialized");
         }
 
-        let _guard = unsafe {
-            MProtect::unlock(text_addr as *mut u8, text_len)
-        };
+        let _guard = unsafe { MProtect::unlock(text_addr as *mut u8, text_len) };
 
         let entry_map = <[layout::XRayFunctionEntry]>::ref_from_bytes(buf.as_ref()).unwrap();
         let (entry_slot, exit_slot, tailcall_slot) = if cfg!(target_arch = "aarch64") {
             (
                 arch::xray_entry as _,
                 arch::xray_exit as _,
-                arch::xray_tailcall as _
+                arch::xray_tailcall as _,
             )
         } else {
             (entry_slot, exit_slot, tailcall_slot)
@@ -193,14 +191,14 @@ fn patch_xray(
 
         for entry in layout::XRayInstrMap(entry_map).iter(xray_section.address()) {
             let mut flag = layout::FuncFlag::empty();
-            
+
             if let Some(filter) = maybe_filter {
                 match (filter.mode(), filter.check(entry.function())) {
                     (layout::FilterMode::MARK, Some(mark)) => flag |= mark.flag(),
                     (layout::FilterMode::MARK, _) => (),
                     (layout::FilterMode::FILTER, Some(mark)) => flag |= mark.flag(),
                     (layout::FilterMode::FILTER, None) => continue,
-                    (..) => continue
+                    (..) => continue,
                 }
             }
 
@@ -231,7 +229,7 @@ fn patch_xray(
                     1 => arch::patch_exit(addr, func_id, exit_slot),
                     // tail call
                     2 => arch::patch_tailcall(addr, func_id, tailcall_slot),
-                    kind => eprintln!("unsupport kind: {}", kind)
+                    kind => eprintln!("unsupport kind: {}", kind),
                 }
             }
         }
@@ -242,7 +240,7 @@ fn patch_xray(
             arch::patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
             arch::patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
         }
-    });    
+    });
 }
 
 extern "C" fn shutdown() {
@@ -255,7 +253,7 @@ struct FuncId(u32);
 
 impl FuncId {
     const CAP: usize = 32 - 8;
-    
+
     fn pack(idx: u32, flag: layout::FuncFlag) -> Option<FuncId> {
         let func_id = idx + 1;
         let flag = (flag.bits() as u32) << Self::CAP;

@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use zerocopy::{ IntoBytes, FromBytes, Immutable, KnownLayout };
-use zerocopy::byteorder::{ NativeEndian, U64 };
-use serde::{ Serialize, Deserialize };
+use zerocopy::byteorder::{NativeEndian, U64};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const SIGN_TRACE: &[u8; 8] = b"sf\0trace";
 pub const SIGN_FILTE: &[u8; 8] = b"sf\0filte";
@@ -15,8 +15,7 @@ pub struct Metadata {
     pub shlib_path: PathBuf,
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Event<ARGS, RV, ALLOC> {
     #[serde(rename = "t")]
     pub tid: u32,
@@ -36,23 +35,21 @@ pub struct Event<ARGS, RV, ALLOC> {
     pub return_value: Option<RV>,
     #[serde(rename = "A")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub alloc_event: Option<ALLOC>
+    pub alloc_event: Option<ALLOC>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AllocEvent {
     #[serde(rename = "s")]
     pub size: u64,
     #[serde(rename = "a")]
     pub align: u64,
     #[serde(rename = "p")]
-    pub ptr: u64    
+    pub ptr: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
-#[serde(transparent)] 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[serde(transparent)]
 pub struct Kind(u8);
 
 impl Kind {
@@ -84,7 +81,7 @@ pub struct XRayFunctionEntry {
     pub kind: u8,
     pub always_instrument: u8,
     pub version: u8,
-    padding: [u8; (4 * 8) - ((2 * 8) + 3)]
+    padding: [u8; (4 * 8) - ((2 * 8) + 3)],
 }
 
 const _ASSERT_SIZE: () = [(); 1][std::mem::size_of::<XRayFunctionEntry>() - 32];
@@ -94,7 +91,7 @@ pub struct XRayInstrMap<'a>(pub &'a [XRayFunctionEntry]);
 pub struct XRayEntry<'a> {
     idx: u32,
     section_offset: u64,
-    entry: &'a XRayFunctionEntry
+    entry: &'a XRayFunctionEntry,
 }
 
 impl XRayInstrMap<'_> {
@@ -102,30 +99,32 @@ impl XRayInstrMap<'_> {
     pub fn get(&self, section_offset: u64, idx: u32) -> XRayEntry<'_> {
         let idx2: usize = idx.try_into().unwrap();
         XRayEntry {
-            idx, section_offset,
-            entry: &self.0[idx2]
+            idx,
+            section_offset,
+            entry: &self.0[idx2],
         }
     }
 
     pub fn iter(&self, section_offset: u64) -> impl Iterator<Item = XRayEntry<'_>> + '_ {
-        self.0.iter()
+        self.0
+            .iter()
             .enumerate()
             .filter(|(_, entry)| entry.version == 2)
             .map(move |(idx, entry)| XRayEntry {
                 idx: idx.try_into().unwrap(),
-                section_offset, entry
+                section_offset,
+                entry,
             })
-        
     }
 }
 
 impl XRayEntry<'_> {
     const ENTRY_SIZE: u64 = std::mem::size_of::<XRayFunctionEntry>() as u64;
-    
+
     pub fn id(&self) -> u32 {
         self.idx
     }
-    
+
     #[allow(dead_code)]
     pub fn kind(&self) -> u8 {
         self.entry.kind
@@ -134,7 +133,7 @@ impl XRayEntry<'_> {
     #[allow(dead_code)]
     pub fn address(&self) -> u64 {
         // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/compiler-rt/lib/xray/xray_interface_internal.h#L59
-        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199        
+        // https://github.com/llvm/llvm-project/blob/llvmorg-20.1.2/llvm/lib/XRay/InstrumentationMap.cpp#L199
         let entry_offset = self.section_offset + u64::from(self.idx) * Self::ENTRY_SIZE;
         entry_offset + self.entry.address.get()
     }
@@ -142,7 +141,7 @@ impl XRayEntry<'_> {
     pub fn function(&self) -> u64 {
         let entry_offset = self.section_offset + u64::from(self.idx) * Self::ENTRY_SIZE;
         entry_offset + self.entry.function.get() + std::mem::size_of::<u64>() as u64
-    }    
+    }
 }
 
 #[derive(FromBytes, Immutable, KnownLayout)]
@@ -154,8 +153,20 @@ pub struct FilterMap {
     map: [FilterMark],
 }
 
-#[derive(IntoBytes, FromBytes, Immutable, KnownLayout)]
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(
+    IntoBytes,
+    FromBytes,
+    Immutable,
+    KnownLayout,
+    Clone,
+    Copy,
+    Debug,
+    Hash,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
 pub struct FilterMode(u64);
 
 impl FilterMode {
@@ -164,15 +175,30 @@ impl FilterMode {
     pub const FILTER: FilterMode = FilterMode(1);
 }
 
-#[derive(IntoBytes, FromBytes, Immutable, KnownLayout)]
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(
+    IntoBytes,
+    FromBytes,
+    Immutable,
+    KnownLayout,
+    Clone,
+    Copy,
+    Debug,
+    Hash,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
 pub struct FilterMark(u64);
 
 #[allow(dead_code)]
 impl FilterMap {
-    pub fn parse<'map>(buf: &'map [u8], build_id: Option<&[u8]>) -> anyhow::Result<&'map FilterMap> {
+    pub fn parse<'map>(
+        buf: &'map [u8],
+        build_id: Option<&[u8]>,
+    ) -> anyhow::Result<&'map FilterMap> {
         use anyhow::Context;
-        
+
         let map = <FilterMap>::ref_from_bytes(buf)
             .ok()
             .context("filter map parse failed")?;
@@ -187,7 +213,8 @@ impl FilterMap {
             if hash != map.build_id_hash {
                 anyhow::bail!(
                     "filtermap build id hash does not match: {:?} vs {:?}",
-                    hash, map.build_id_hash
+                    hash,
+                    map.build_id_hash
                 );
             }
         }
@@ -198,7 +225,7 @@ impl FilterMap {
     pub fn mode(&self) -> FilterMode {
         self.mode
     }
-    
+
     pub fn check(&self, addr: u64) -> Option<FilterMark> {
         self.map
             .binary_search_by_key(&addr, |mark| mark.addr())
@@ -210,7 +237,7 @@ impl FilterMap {
 #[allow(dead_code)]
 impl FilterMark {
     const CAP: usize = 64 - 8;
-    
+
     pub fn new(addr: u64, flag: FuncFlag) -> Option<FilterMark> {
         let flag = (flag.bits() as u64) << Self::CAP;
 
@@ -222,7 +249,7 @@ impl FilterMark {
     }
 
     pub fn flag(self) -> FuncFlag {
-        FuncFlag::from_bits_truncate((self.0 >> Self::CAP) as u8)        
+        FuncFlag::from_bits_truncate((self.0 >> Self::CAP) as u8)
     }
 }
 

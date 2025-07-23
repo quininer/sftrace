@@ -1,10 +1,9 @@
+use anyhow::Context;
+use argh::FromArgs;
 use std::env;
 use std::ffi::OsString;
-use std::path::{ Path, PathBuf };
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use argh::FromArgs;
-use anyhow::Context;
-
 
 /// Record command
 #[derive(FromArgs, PartialEq, Debug)]
@@ -36,7 +35,11 @@ pub struct SubCommand {
 }
 
 fn sftracelib() -> String {
-    format!("{}sftrace{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX)
+    format!(
+        "{}sftrace{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    )
 }
 
 fn search_sftracelib(datadir: &Path) -> anyhow::Result<PathBuf> {
@@ -46,7 +49,7 @@ fn search_sftracelib(datadir: &Path) -> anyhow::Result<PathBuf> {
     if path.is_file() {
         return Ok(path);
     }
-    
+
     let exd = env::current_exe()?;
     let exd = exd
         .parent()
@@ -70,8 +73,8 @@ impl SubCommand {
         const LIBRARY_PATH_NAME: &str = "DYLD_LIBRARY_PATH";
 
         let cwd = env::current_dir()?;
-        let projdir = directories::ProjectDirs::from("", "", "sftrace")
-            .context("not found project dir")?;
+        let projdir =
+            directories::ProjectDirs::from("", "", "sftrace").context("not found project dir")?;
 
         match (self.print_solib, self.print_solib_install_dir) {
             (true, true) => anyhow::bail!("--print can only have one argument"),
@@ -79,25 +82,22 @@ impl SubCommand {
                 let path = search_sftracelib(projdir.data_dir())?;
                 print!("{}", path.display());
                 return Ok(());
-            },
+            }
             (_, true) => {
                 let path = projdir.data_dir();
                 print!("{}", path.display());
-                return Ok(())
-            },
-            (..) => ()
+                return Ok(());
+            }
+            (..) => (),
         }
 
         let mut iter = self.cmd.iter();
         let exe = iter.next().context("need command")?;
 
-        let output = self.output.clone()
-            .unwrap_or_else(|| cwd.join("sf.log"));
+        let output = self.output.clone().unwrap_or_else(|| cwd.join("sf.log"));
 
         let mut cmd = Command::new(exe);
-        cmd
-            .args(iter)
-            .env("SFTRACE_OUTPUT_FILE", output);
+        cmd.args(iter).env("SFTRACE_OUTPUT_FILE", output);
 
         if let Some(path) = self.filter.as_ref() {
             cmd.env("SFTRACE_FILTER", path);
@@ -106,7 +106,7 @@ impl SubCommand {
         if env::var_os(LIBRARY_PATH_NAME).is_none() {
             let solib = match self.solib.as_ref() {
                 Some(p) => p.clone(),
-                None => search_sftracelib(projdir.data_dir())?
+                None => search_sftracelib(projdir.data_dir())?,
             };
 
             let libdir = solib.parent().unwrap();

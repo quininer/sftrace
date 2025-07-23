@@ -1,12 +1,11 @@
+use crate::layout;
+use argh::FromArgs;
+use object::Object;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::collections::HashSet;
-use argh::FromArgs;
-use object::Object;
 use zerocopy::IntoBytes;
-use crate::layout;
-
 
 /// Filter command
 #[derive(FromArgs, PartialEq, Debug)]
@@ -26,7 +25,7 @@ pub struct SubCommand {
 
     /// filter-file output path
     #[argh(option, short = 'o')]
-    output: PathBuf,    
+    output: PathBuf,
 }
 
 impl SubCommand {
@@ -55,15 +54,17 @@ impl SubCommand {
             let mut hint = false;
 
             if listmap.contains(sym.name())
-                || maybe_regex.as_ref()
-                .filter(|re| re.is_match(sym.name()))
-                .is_some()
+                || maybe_regex
+                    .as_ref()
+                    .filter(|re| re.is_match(sym.name()))
+                    .is_some()
             {
                 hint = true;
             }
 
             if hint {
-                let mark = layout::FilterMark::new(sym.address(), layout::FuncFlag::empty()).unwrap();
+                let mark =
+                    layout::FilterMark::new(sym.address(), layout::FuncFlag::empty()).unwrap();
                 map.push(mark);
             }
         }
@@ -74,7 +75,8 @@ impl SubCommand {
         println!("done {:?}", map.len());
 
         let mut output = fs::File::create(&self.output)?;
-        let hash = obj.build_id()
+        let hash = obj
+            .build_id()
             .ok()
             .flatten()
             .map(layout::build_id_hash)
@@ -82,8 +84,8 @@ impl SubCommand {
         output.write_all(layout::SIGN_FILTE)?;
         output.write_all(&hash.to_ne_bytes())?;
         output.write_all(layout::FilterMode::FILTER.as_bytes())?;
-        output.write_all(map.as_bytes())?;        
+        output.write_all(map.as_bytes())?;
 
-        Ok(())   
+        Ok(())
     }
 }
