@@ -18,7 +18,7 @@ members = [ "setup" ]
 # tools
 anyhow = "1"
 argh = "0.1"
-addr2line = "0.24"
+addr2line = "0.26"
 toml = "0.8"
 flate2 = "1"
 prost = "0.13"
@@ -28,11 +28,12 @@ siphasher = "1"
 indexmap = "2"
 plotly = { version = "0.12", features = [ "plotly_embed_js" ] }
 directories = "6"
+polars = { version = "0.53", features = [ "parquet" ] }
 
 # xray patch
 libc = "0.2"
 findshlibs = "0.10"
-object = "0.36"
+object = "0.38"
 memmap2 = "0.9"
 glob = "0.3"
 regex = { version = "1", default-features = false, features = [ "std", "perf" ] }
