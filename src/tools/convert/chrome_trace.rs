@@ -17,12 +17,13 @@ pub struct PacketWriter {
     addrmap: HashMap<u64, (Option<u64>, Option<u64>)>,
     event_names: HashMap<String, u64>,
     source_locations: HashMap<(String, Option<u32>), u64>,
+    stack: HashMap<u32, Vec<u32>>,
     trace: Trace,
 }
 
 impl PacketWriter {
-    pub fn convert(&mut self, mut log: &mut io::BufReader<fs::File>, state: &mut State, output: &Path)
-    -> anyhow::Result<()>
+    pub fn convert(mut self, mut log: &mut io::BufReader<fs::File>, state: &mut State, output: &Path)
+        -> anyhow::Result<()>
     {
         let output = fs::File::create(output)?;
         let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
@@ -34,14 +35,14 @@ impl PacketWriter {
             match event.kind {
                 layout::Kind::ENTRY => {
                     let func_id = event.func_id;
-                    state.stack.entry(event.tid).or_default().push(func_id);
+                    self.stack.entry(event.tid).or_default().push(func_id);
                     self.push_call(state, &event, func_id);
                 }
                 layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                     let mut has_entry = false;
                     let mut is_empty = false;
 
-                    if let Some(stack) = state.stack.get_mut(&event.tid) {
+                    if let Some(stack) = self.stack.get_mut(&event.tid) {
                         if let Some(entry_func_id) = stack.pop() {
                             has_entry = true;
 
@@ -70,7 +71,7 @@ impl PacketWriter {
                     }
 
                     if is_empty {
-                        state.stack.remove(&event.tid);
+                        self.stack.remove(&event.tid);
                     }
 
                     self.push_call(state, &event, event.func_id);

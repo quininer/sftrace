@@ -1,4 +1,5 @@
 mod chrome_trace;
+mod pola;
 
 use crate::layout;
 use anyhow::Context;
@@ -93,11 +94,14 @@ impl SubCommand {
             process_id: pid,
             section_offset: xray_section.address(),
             entry_map,
-            stack: HashMap::new(),
         };
-        let mut writer = chrome_trace::PacketWriter::default();
 
-        writer.convert(&mut log, &mut state, &self.output)?;
+        match self.r#type {
+            Type::ChromeTrace =>
+                chrome_trace::PacketWriter::default().convert(&mut log, &mut state, &self.output)?,
+            Type::Pola =>
+                pola::PacketWriter::default().convert(&mut log, &mut state, &self.output)?,
+        }
 
         Ok(())
     }
@@ -110,7 +114,6 @@ struct State<'g> {
     process_id: i32,
     section_offset: u64,
     entry_map: layout::XRayInstrMap<'g>,
-    stack: HashMap<u32, Vec<u32>>,
 }
 
 struct Addr2Line {

@@ -2,10 +2,11 @@ use serde::{Deserialize, Deserializer, de};
 use std::fmt;
 use std::marker::PhantomData;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 #[serde(transparent)]
 pub struct ArgsData(pub VecMap<String, u128>);
 
+#[derive(Default)]
 pub struct VecMap<K, V> {
     pub vec: Vec<(K, V)>,
 }

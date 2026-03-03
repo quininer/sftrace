@@ -60,6 +60,11 @@ impl Kind {
     pub const DEALLOC: Kind = Kind(5);
     pub const REALLOC_ALLOC: Kind = Kind(6);
     pub const REALLOC_DEALLOC: Kind = Kind(7);
+
+    #[allow(dead_code)]
+    pub fn as_u8(self) -> u8 {
+        self.0
+    }
 }
 
 fn u32_is_zero(n: &u32) -> bool {
