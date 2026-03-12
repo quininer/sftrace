@@ -98,6 +98,7 @@ impl PacketWriter {
                     let mut has_entry = false;
                     let mut is_empty = false;
 
+                    let mut entry_frame_id = None;
                     let mut parent = None;
                     let exit_func = state
                         .entry_map
@@ -105,8 +106,9 @@ impl PacketWriter {
                         .function();                    
 
                     if let Some(stack) = self.stack.get_mut(&event.tid) {
-                        if let Some((entry_func_id, _)) = stack.pop() {
+                        if let Some((entry_func_id, frame_id)) = stack.pop() {
                             has_entry = true;
+                            entry_frame_id = Some(frame_id);
 
                             let entry_func = state
                                 .entry_map
@@ -134,7 +136,7 @@ impl PacketWriter {
                     }
                                   
                     frame_push!{
-                        frame_id => frame_id,
+                        frame_id => entry_frame_id.unwrap_or_default(),
                         parent => parent.unwrap_or_default(),
                         tid => event.tid,
                         func_id => exit_func,

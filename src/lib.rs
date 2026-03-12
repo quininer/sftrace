@@ -140,7 +140,7 @@ fn patch_xray(
             let pid = std::process::id();
 
             let mut path = PathBuf::from(outfile.clone());
-            let mut use_pid = false;
+            let mut use_pid = true;
 
             let mut fd = loop {
                 match fs::OpenOptions::new()
@@ -157,7 +157,7 @@ fn patch_xray(
                             use std::collections::hash_map::RandomState;
                             use std::hash::BuildHasher;
 
-                            let rand = RandomState::new().hash_one(0x42);
+                            let rand = RandomState::new().hash_one(pid);
 
                             path.with_extension(rand.to_string())
                         };
