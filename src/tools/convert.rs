@@ -29,7 +29,7 @@ pub struct SubCommand {
     config: Option<PathBuf>,
 
     /// output type
-    #[argh(option)]
+    #[argh(option, default = "Default::default()")]
     r#type: Type,
 
     /// chrome-trace output path
@@ -38,8 +38,9 @@ pub struct SubCommand {
 }
 
 #[derive(argh::FromArgValue)]
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Default)]
 enum Type {
+    #[default]
     ChromeTrace,
     Pola,
 }

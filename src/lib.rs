@@ -236,9 +236,9 @@ fn patch_xray(
 
         #[cfg(not(target_arch = "aarch64"))]
         unsafe {
-            arch::patch_slot(entry_slot as *mut u8, arch::xray_entry as usize);
-            arch::patch_slot(exit_slot as *mut u8, arch::xray_exit as usize);
-            arch::patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as usize);
+            arch::patch_slot(entry_slot as *mut u8, arch::xray_entry as *const () as usize);
+            arch::patch_slot(exit_slot as *mut u8, arch::xray_exit as *const () as usize);
+            arch::patch_slot(tailcall_slot as *mut u8, arch::xray_tailcall as *const () as usize);
         }
     });
 }
