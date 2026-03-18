@@ -1,6 +1,6 @@
 use crate::layout;
 use crate::util::ArgsData;
-use micromegas_perfetto::protos::{
+use perfetto_trace_proto::{
     DebugAnnotation, EventName, SourceLocation, Trace, TracePacket, debug_annotation, trace_packet,
     track_event,
 };
@@ -99,15 +99,18 @@ impl PacketWriter {
         let pid = global_state.process_id;
 
         if self.trace.packet.is_empty() {
-            let mut packet = micromegas_perfetto::writer::new_trace_packet();
-            let mut track_desc = micromegas_perfetto::writer::new_track_descriptor(pid as u64);
-            track_desc.process = Some(micromegas_perfetto::protos::ProcessDescriptor {
+            let mut packet = perfetto_trace_proto::TracePacket::default();
+            let mut track_desc = perfetto_trace_proto::TrackDescriptor::default();
+            track_desc.uuid = Some(pid as u64);
+            track_desc.process = Some(perfetto_trace_proto::ProcessDescriptor {
                 pid: Some(pid),
                 ..Default::default()
             });
             packet.first_packet_on_sequence = Some(true);
             packet.sequence_flags = Some(3);
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));
+            packet.optional_trusted_packet_sequence_id
+                = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
             self.trace.packet.push(packet);
         }
 
@@ -123,15 +126,19 @@ impl PacketWriter {
         let tid = event.tid;
 
         if !self.threads.insert(tid) {
-            let mut packet = micromegas_perfetto::writer::new_trace_packet();
-            let mut track_desc = micromegas_perfetto::writer::new_track_descriptor(tid as u64);
+            let mut packet = perfetto_trace_proto::TracePacket::default();
+            let mut track_desc = perfetto_trace_proto::TrackDescriptor::default();
+            track_desc.uuid = Some(tid as u64);
             track_desc.parent_uuid = Some(pid);
-            track_desc.thread = Some(micromegas_perfetto::protos::ThreadDescriptor {
+            track_desc.thread = Some(perfetto_trace_proto::ThreadDescriptor {
                 pid: Some(global_state.process_id),
                 tid: Some(tid.try_into().unwrap()),
                 ..Default::default()
             });
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));
+            packet.sequence_flags = Some(2);
+            packet.optional_trusted_packet_sequence_id
+                = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
             self.trace.packet.push(packet);
         }
 
@@ -203,9 +210,13 @@ impl PacketWriter {
         let entry = state.entry_map.get(state.section_offset, func_id);
         let addr = entry.function();
 
-        let mut packet = micromegas_perfetto::writer::new_trace_packet();
-        let mut track_event = micromegas_perfetto::writer::new_track_event();
+
+        let mut packet = perfetto_trace_proto::TracePacket::default();
+        let mut track_event = perfetto_trace_proto::TrackEvent::default();
         packet.timestamp = Some(event.time);
+        packet.sequence_flags = Some(2);
+        packet.optional_trusted_packet_sequence_id
+            = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
         track_event.track_uuid = Some(thread_uuid);
 
         match event.kind {
