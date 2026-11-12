@@ -1,14 +1,13 @@
-use std::{io, fs};
-use std::path::Path;
-use std::io::BufRead;
-use std::collections::HashMap;
+use super::State;
+use crate::layout;
+use crate::util::ArgsData;
 use indexmap::IndexSet;
 use polars::io::parquet;
 use polars::prelude::*;
-use crate::layout;
-use crate::util::ArgsData;
-use super::State;
-
+use std::collections::HashMap;
+use std::io::BufRead;
+use std::path::Path;
+use std::{fs, io};
 
 #[derive(Default)]
 pub struct PacketWriter {
@@ -19,9 +18,12 @@ pub struct PacketWriter {
 }
 
 impl PacketWriter {
-    pub fn convert(mut self, mut log: &mut io::BufReader<fs::File>, state: &mut State, path: &Path)
-        -> anyhow::Result<()>
-    {   
+    pub fn convert(
+        mut self,
+        mut log: &mut io::BufReader<fs::File>,
+        state: &mut State,
+        path: &Path,
+    ) -> anyhow::Result<()> {
         let packet_schema = {
             let mut schema = Schema::with_capacity(8);
             schema.with_column("frame_id".into(), DataType::UInt64);
@@ -32,7 +34,7 @@ impl PacketWriter {
             schema.with_column("kind".into(), DataType::UInt32);
             // FIXME
             // Error: parquet: File out of specification: The number of columns in the row group (8) must be equal to the number of columns in the schema (10)
-            // 
+            //
             // schema.with_column("args".into(), DataType::List(Box::new(DataType::Struct(vec![
             //     Field::new("name".into(), DataType::String),
             //     Field::new("value".into(), DataType::UInt128),
@@ -43,7 +45,7 @@ impl PacketWriter {
             // ]))));
             schema
         };
-        
+
         let output = fs::File::create(path)?;
         let output = parquet::write::ParquetWriter::new(output);
         let mut output = output.batched(&packet_schema)?;
@@ -57,7 +59,7 @@ impl PacketWriter {
                     columns.$key.push($value);
                 )*
             }
-        }        
+        }
 
         while !log.fill_buf()?.is_empty() {
             let event: layout::Event<ArgsData, ArgsData, layout::AllocEvent> =
@@ -80,10 +82,14 @@ impl PacketWriter {
                         && let Some(frame) = state.loader.lookup(entry_func)
                     {
                         self.names.push(frame.name);
-                        self.files.push(format!("{}:{}", frame.file.unwrap_or_default(), frame.line.unwrap_or_default()));
+                        self.files.push(format!(
+                            "{}:{}",
+                            frame.file.unwrap_or_default(),
+                            frame.line.unwrap_or_default()
+                        ));
                     }
-                    
-                    frame_push!{
+
+                    frame_push! {
                         frame_id => frame_id,
                         parent => parent,
                         tid => event.tid,
@@ -93,7 +99,7 @@ impl PacketWriter {
                         // args => args_data(event.args.as_ref()),
                         // retval => args_data(event.args.as_ref()),
                     }
-                },
+                }
                 layout::Kind::EXIT | layout::Kind::TAIL_CALL => {
                     let mut has_entry = false;
                     let mut is_empty = false;
@@ -103,7 +109,7 @@ impl PacketWriter {
                     let exit_func = state
                         .entry_map
                         .get(state.section_offset, event.func_id)
-                        .function();                    
+                        .function();
 
                     if let Some(stack) = self.stack.get_mut(&event.tid) {
                         if let Some((entry_func_id, frame_id)) = stack.pop() {
@@ -134,8 +140,8 @@ impl PacketWriter {
                     if is_empty {
                         self.stack.remove(&event.tid);
                     }
-                                  
-                    frame_push!{
+
+                    frame_push! {
                         frame_id => entry_frame_id.unwrap_or_default(),
                         parent => parent.unwrap_or_default(),
                         tid => event.tid,
@@ -145,8 +151,7 @@ impl PacketWriter {
                         // args => args_data(event.args.as_ref()),
                         // retval => args_data(event.return_value.as_ref()),
                     }
-
-                },
+                }
                 // temp ignore
                 layout::Kind::ALLOC
                 | layout::Kind::DEALLOC
@@ -176,7 +181,7 @@ impl PacketWriter {
         let output = fs::File::create(path.with_added_extension("symtab"))?;
         let output = parquet::write::ParquetWriter::new(output);
         output.finish(&mut df)?;
-        
+
         Ok(())
     }
 }
@@ -219,12 +224,7 @@ impl PacketSchema {
         }
 
         let df = frame_collect!(
-            frame_id,
-            parent,
-            tid,
-            func_id,
-            time,
-            kind,
+            frame_id, parent, tid, func_id, time, kind,
             // args,
             // retval,
         )?;

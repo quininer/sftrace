@@ -1,3 +1,4 @@
+use super::State;
 use crate::layout;
 use crate::util::ArgsData;
 use perfetto_trace_proto::{
@@ -9,7 +10,6 @@ use std::collections::{HashMap, HashSet, hash_map};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::{fs, io};
-use super::State;
 
 #[derive(Default)]
 pub struct PacketWriter {
@@ -22,12 +22,15 @@ pub struct PacketWriter {
 }
 
 impl PacketWriter {
-    pub fn convert(mut self, mut log: &mut io::BufReader<fs::File>, state: &mut State, output: &Path)
-        -> anyhow::Result<()>
-    {
+    pub fn convert(
+        mut self,
+        mut log: &mut io::BufReader<fs::File>,
+        state: &mut State,
+        output: &Path,
+    ) -> anyhow::Result<()> {
         let output = fs::File::create(output)?;
         let mut output = flate2::write::GzEncoder::new(output, flate2::Compression::fast());
-                
+
         while !log.fill_buf()?.is_empty() {
             let event: layout::Event<ArgsData, ArgsData, layout::AllocEvent> =
                 cbor4ii::serde::from_reader(&mut log)?;
@@ -94,23 +97,25 @@ impl PacketWriter {
 
         Ok(())
     }
-    
+
     fn process_uuid(&mut self, global_state: &State) -> u64 {
         let pid = global_state.process_id;
 
         if self.trace.packet.is_empty() {
             let mut packet = perfetto_trace_proto::TracePacket::default();
-            let mut track_desc = perfetto_trace_proto::TrackDescriptor::default();
-            track_desc.uuid = Some(pid as u64);
-            track_desc.process = Some(perfetto_trace_proto::ProcessDescriptor {
-                pid: Some(pid),
+            let track_desc = perfetto_trace_proto::TrackDescriptor {
+                uuid: Some(pid as u64),
+                process: Some(perfetto_trace_proto::ProcessDescriptor {
+                    pid: Some(pid),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             packet.first_packet_on_sequence = Some(true);
             packet.sequence_flags = Some(3);
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));
-            packet.optional_trusted_packet_sequence_id
-                = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
+            packet.optional_trusted_packet_sequence_id =
+                Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
             self.trace.packet.push(packet);
         }
 
@@ -127,18 +132,20 @@ impl PacketWriter {
 
         if !self.threads.insert(tid) {
             let mut packet = perfetto_trace_proto::TracePacket::default();
-            let mut track_desc = perfetto_trace_proto::TrackDescriptor::default();
-            track_desc.uuid = Some(tid as u64);
-            track_desc.parent_uuid = Some(pid);
-            track_desc.thread = Some(perfetto_trace_proto::ThreadDescriptor {
-                pid: Some(global_state.process_id),
-                tid: Some(tid.try_into().unwrap()),
+            let track_desc = perfetto_trace_proto::TrackDescriptor {
+                uuid: Some(tid as u64),
+                parent_uuid: Some(pid),
+                thread: Some(perfetto_trace_proto::ThreadDescriptor {
+                    pid: Some(global_state.process_id),
+                    tid: Some(tid.try_into().unwrap()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             packet.data = Some(trace_packet::Data::TrackDescriptor(track_desc));
             packet.sequence_flags = Some(2);
-            packet.optional_trusted_packet_sequence_id
-                = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
+            packet.optional_trusted_packet_sequence_id =
+                Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
             self.trace.packet.push(packet);
         }
 
@@ -210,13 +217,12 @@ impl PacketWriter {
         let entry = state.entry_map.get(state.section_offset, func_id);
         let addr = entry.function();
 
-
         let mut packet = perfetto_trace_proto::TracePacket::default();
         let mut track_event = perfetto_trace_proto::TrackEvent::default();
         packet.timestamp = Some(event.time);
         packet.sequence_flags = Some(2);
-        packet.optional_trusted_packet_sequence_id
-            = Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
+        packet.optional_trusted_packet_sequence_id =
+            Some(trace_packet::OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1));
         track_event.track_uuid = Some(thread_uuid);
 
         match event.kind {

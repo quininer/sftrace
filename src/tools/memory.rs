@@ -36,14 +36,6 @@ pub struct SubCommand {
     #[argh(option)]
     flamegraph: Option<PathBuf>,
 
-    /// alloc event plot
-    #[argh(option)]
-    plot: Option<PathBuf>,
-
-    /// fold stage (plot)
-    #[argh(switch)]
-    fold: bool,
-
     /// select stage (flamegraph)
     #[argh(option)]
     select: Option<String>,
@@ -130,10 +122,6 @@ impl SubCommand {
             )?;
         }
 
-        if let Some(path) = self.plot.as_ref() {
-            memory_analyzer.write_plot(self.fold, &stage_result, &analyze_result, path)?;
-        }
-
         if !self.interactive {
             return Ok(());
         }
@@ -170,10 +158,10 @@ impl SubCommand {
                             .filter(|_| show_stack)
                             .map(|stackid| memory_analyzer.stacklist[stackid])
                             .map(|func_id| symbol_table.entry_map.get(symbol_table.section_offset, func_id))
-                            .and_then(|entry| symbol_table.symbol_map.get(entry.function()))
+                            .and_then(|entry| symbol_table.symbol_map.before(entry.function()))
                             .map(|name| addr2line::demangle_auto(name.name().into(), None))
                             .unwrap_or_default();
-                        println!("{} {}\ttid:{}\tsize:{}\t\t{}", id, kind, ev.tid, ev.size, &last_stack);
+                        println!("{} {}\ttid:{}\tsize:{}\t\t{}", id, kind, ev.tid, ev.size, last_stack);
                     }
                     Ok(())
                 },
@@ -507,7 +495,7 @@ impl MemoryAnalyzer {
                 let addr = entry.function();
                 let symname = symtab
                     .symbol_map
-                    .get(addr)
+                    .before(addr)
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let symname = addr2line::demangle_auto(symname.into(), None);
@@ -533,7 +521,7 @@ impl MemoryAnalyzer {
                 let entry = symtab.entry_map.get(symtab.section_offset, func_id);
                 let name = symtab
                     .symbol_map
-                    .get(entry.function())
+                    .before(entry.function())
                     .map(|sym| sym.name())
                     .unwrap_or("unknown");
                 let name = addr2line::demangle_auto(name.into(), None);
@@ -594,42 +582,6 @@ impl MemoryAnalyzer {
             }
         }
 
-        Ok(())
-    }
-
-    fn write_plot(
-        &self,
-        fold: bool,
-        stage_result: &StageResult,
-        analyze_result: &AnalyzeResult,
-        path: &Path,
-    ) -> anyhow::Result<()> {
-        use plotly::{Plot, Scatter};
-
-        let mut plot = Plot::new();
-
-        for (stage_idx, list) in analyze_result.list.iter().enumerate() {
-            if fold {
-                let x = (0..list.len()).collect();
-                let y = list.clone();
-                let t = stage_result.list[stage_idx]
-                    .iter()
-                    .map(|x| format!("e{}", x))
-                    .collect();
-                let trace = Scatter::new(x, y).text_array(t);
-                plot.add_trace(trace);
-            } else {
-                let x = stage_result.list[stage_idx]
-                    .iter()
-                    .map(|x| format!("e{}", x))
-                    .collect();
-                let y = list.clone();
-                let trace = Scatter::new(x, y).text_template("e%{x}");
-                plot.add_trace(trace);
-            }
-        }
-
-        plot.write_html(path);
         Ok(())
     }
 }

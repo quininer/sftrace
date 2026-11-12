@@ -63,6 +63,13 @@ build_slot! {
     sftrace_tailcall_slot;
 }
 
+/// Install the sftrace instrumentation hooks.
+///
+/// # Safety
+///
+/// This patches the entry/exit/tailcall slots of the target binary, which is
+/// not thread-safe: call it before any other thread starts executing the
+/// instrumented code, typically once at process startup.
 #[inline(always)]
 pub unsafe fn setup() {
     if std::env::var_os("SFTRACE_OUTPUT_FILE").is_none() {

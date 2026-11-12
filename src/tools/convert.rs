@@ -37,8 +37,7 @@ pub struct SubCommand {
     output: PathBuf,
 }
 
-#[derive(argh::FromArgValue)]
-#[derive(PartialEq, Eq, Debug, Default)]
+#[derive(argh::FromArgValue, PartialEq, Eq, Debug, Default)]
 enum Type {
     #[default]
     ChromeTrace,
@@ -98,10 +97,12 @@ impl SubCommand {
         };
 
         match self.r#type {
-            Type::ChromeTrace =>
-                chrome_trace::PacketWriter::default().convert(&mut log, &mut state, &self.output)?,
-            Type::Pola =>
-                pola::PacketWriter::default().convert(&mut log, &mut state, &self.output)?,
+            Type::ChromeTrace => {
+                chrome_trace::PacketWriter::default().convert(&mut log, &mut state, &self.output)?
+            }
+            Type::Pola => {
+                pola::PacketWriter::default().convert(&mut log, &mut state, &self.output)?
+            }
         }
 
         Ok(())
