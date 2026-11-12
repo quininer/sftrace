@@ -11,6 +11,10 @@ Add `xray` compiler flag to `.cargo/config.toml`
 > Requires Rust nightly-2025-05-28 or later for xray support on macOS.
 > See [PR #140790](https://github.com/rust-lang/rust/pull/140790) for details.
 
+> On AArch64, Rust 1.91 or later (LLVM 21) is required, older versions report
+> tail call sleds as function exit sleds.
+> See [PR #141403](https://github.com/llvm/llvm-project/pull/141403) for details.
+
 ```toml
 rustflags = [
   "-Zinstrument-xray=always",

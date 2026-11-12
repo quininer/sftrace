@@ -109,48 +109,15 @@ macro_rules! build {
             );
         }
     };
+    // The exit sled runs on the return path, where the sled itself already
+    // preserves `x0`/`x30`, so there is nothing extra to keep alive and the
+    // entry layout works for it.
+    //
+    // Historically LLVM reported tail call sleds as function exits on AArch64
+    // (https://github.com/llvm/llvm-project/issues/141051, fixed in LLVM 21),
+    // which forced exit to spill the local variable registers like tailcall.
     (exit: $name:ident -> $sym:expr) => {
-        // HACK https://github.com/llvm/llvm-project/issues/141051
-        //
-        // llvm seems to report tailcall as exit,
-        // so we also need additional backup registers for exit
-        #[unsafe(naked)]
-        pub unsafe extern "C" fn $name() {
-            std::arch::naked_asm!(
-                "add x30, x30, #12",
-
-                // caller-saved
-                //
-                // This is used to handle the case where
-                // a tail call is made by jumping through a local variable register.
-                //
-                // ```
-                // nop;
-                // br x9;
-                // ```
-                "stp x9,  x10, [sp, #-16]!",
-                "stp x11, x12, [sp, #-16]!",
-                "stp x13, x14, [sp, #-16]!",
-                "stp x15, x16, [sp, #-16]!",
-
-                helper!(save args),
-
-                "mov w0, w17",
-                "mov x1, sp",
-                "bl {0}",
-
-                helper!(restore args),
-
-                "ldp x15, x16, [sp], #16",
-                "ldp x13, x14, [sp], #16",
-                "ldp x11, x12, [sp], #16",
-                "ldp x9,  x10, [sp], #16",
-
-                "ret",
-
-                sym $sym,
-            );
-        }
+        build!(entry: $name -> $sym);
     };
     (tailcall: $name:ident -> $sym:expr) => {
         #[unsafe(naked)]
@@ -160,13 +127,18 @@ macro_rules! build {
 
                 // caller-saved
                 //
-                // This is used to handle the case where
-                // a tail call is made by jumping through a local variable register.
+                // A tail call may jump through a local variable register, and the
+                // sled itself only preserves `x0`/`x30`, so the registers that may
+                // hold the jump target must survive the handler call.
                 //
                 // ```
-                // nop;
-                // br x9;
+                // b +32;   ; sled
+                // nop;     ; patched
+                // ...
+                // br x9;   ; tail call
                 // ```
+                //
+                // https://github.com/llvm/llvm-project/blob/llvmorg-21.1.0/llvm/lib/Target/AArch64/AArch64AsmPrinter.cpp#L427
                 "stp x9,  x10, [sp, #-16]!",
                 "stp x11, x12, [sp, #-16]!",
                 "stp x13, x14, [sp, #-16]!",
